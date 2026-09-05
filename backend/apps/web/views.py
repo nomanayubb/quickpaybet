@@ -1,5 +1,5 @@
 from django.contrib.auth import login as auth_login, logout as auth_logout
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import authenticate
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
@@ -16,7 +16,30 @@ from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
 from apps.payments.models import CryptoPayment
 from apps.payments.services import create_deposit
+from apps.reports.services import get_overview_report
 
+def admin_dashboard_view(request):
+    if not (
+        request.user.is_authenticated
+        and (
+            request.user.is_staff
+            or request.user.role in (User.Role.ADMIN, User.Role.MASTER)
+        )
+    ):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    report = get_overview_report()
+    recent_matches = Match.objects.select_related('sport', 'tournament').order_by('-start_time')[:10]
+
+    return render(
+        request,
+        'web/dashboard.html',
+        {
+            'report': report,
+            'recent_matches': recent_matches,
+            'active': 'dashboard',
+        },
+    )
 
 def home_view(request):
     matches = Match.objects.select_related('sport', 'tournament').filter(

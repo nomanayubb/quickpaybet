@@ -2,6 +2,7 @@ from django.urls import path
 from django.contrib.auth import views as auth_views
 
 from .views import (
+    admin_dashboard_view,
     home_view,
     register_view,
     login_view,
@@ -23,6 +24,7 @@ urlpatterns = [
     path('logout/', logout_view, name='logout'),
     path('matches/', matches_view, name='matches'),
     path('matches/<int:pk>/', match_detail_view, name='match_detail'),
+    path('dashboard/', admin_dashboard_view, name='dashboard'),
     path('wallet/', wallet_view, name='wallet'),
     path('wallet/deposit/', wallet_deposit_view, name='wallet_deposit'),
     path('wallet/withdraw/', wallet_withdraw_view, name='wallet_withdraw'),

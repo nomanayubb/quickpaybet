@@ -1,0 +1,66 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Admin / Master Dashboard</h1>
+
+    <div>
+        <div class="stat-card">
+            <strong>{{ report.total_users }}</strong>
+            <span>Total Users</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_bets }}</strong>
+            <span>Total Bets</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_turnover }}</strong>
+            <span>Turnover</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_payout }}</strong>
+            <span>Payout</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_deposits }}</strong>
+            <span>Deposits</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_withdrawals }}</strong>
+            <span>Withdrawals</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.profit }}</strong>
+            <span>Profit</span>
+        </div>
+    </div>
+
+    <h3>Recent Matches</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Match</th>
+                <th>Sport</th>
+                <th>Start</th>
+                <th>Status</th>
+                <th>Odds (H/D/A)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for match in recent_matches %}
+                <tr>
+                    <td>{{ match.home_team }} v {{ match.away_team }}</td>
+                    <td>{{ match.sport.name }}</td>
+                    <td>{{ match.start_time }}</td>
+                    <td>{{ match.status }}</td>
+                    <td>
+                        {{ match.odds_home|default:"-" }} /
+                        {{ match.odds_draw|default:"-" }} /
+                        {{ match.odds_away|default:"-" }}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5">No matches yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}
