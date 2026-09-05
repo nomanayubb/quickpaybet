@@ -65,6 +65,7 @@
             {% if user.is_authenticated %}
                 {% if user.is_staff or user.role == 'admin' or user.role == 'master' %}
                     <a href="{% url 'web:dashboard' %}" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a>
+                    <a href="{% url 'web:admin_reports' %}" class="{% if active == 'reports' %}active{% endif %}">Reports</a>
                     <a href="{% url 'web:admin_matches' %}" class="{% if active == 'admin_matches' %}active{% endif %}">Manage Matches</a>
                     <a href="{% url 'web:admin_users' %}" class="{% if active == 'admin_users' %}active{% endif %}">Manage Users</a>
                 {% endif %}

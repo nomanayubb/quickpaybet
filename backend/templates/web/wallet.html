@@ -3,7 +3,7 @@
 {% block content %}
     <h1>Your Wallet</h1>
     <div class="wallet-balance">
-        {{ wallet.available_balance }}
+        {{ wallet.available_balance|floatformat:2 }}
         <span style="font-size:16px; color:#666;">available USDT</span>
     </div>
 

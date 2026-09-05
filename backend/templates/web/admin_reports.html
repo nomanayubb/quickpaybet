@@ -1,0 +1,62 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Reports &amp; Analytics</h1>
+
+    <div>
+        <div class="stat-card">
+            <strong>{{ report.total_users }}</strong>
+            <span>Total Users</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_bets }}</strong>
+            <span>Total Bets</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_turnover }}</strong>
+            <span>Turnover</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_payout }}</strong>
+            <span>Payout</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_deposits }}</strong>
+            <span>Deposits</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.total_withdrawals }}</strong>
+            <span>Withdrawals</span>
+        </div>
+        <div class="stat-card">
+            <strong>{{ report.profit }}</strong>
+            <span>Profit</span>
+        </div>
+    </div>
+
+    <h3>Daily Report – Last 7 Days</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Bets</th>
+                <th>Turnover</th>
+                <th>Payout</th>
+                <th>Profit</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in daily %}
+                <tr>
+                    <td>{{ record.date }}</td>
+                    <td>{{ record.bets_count }}</td>
+                    <td>{{ record.turnover }}</td>
+                    <td>{{ record.payout }}</td>
+                    <td>{{ record.profit }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5">No data for this period.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

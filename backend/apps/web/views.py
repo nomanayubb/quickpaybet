@@ -5,7 +5,9 @@ from django.core.cache import cache
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from datetime import timedelta
 
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
@@ -19,7 +21,7 @@ from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
 from apps.payments.models import CryptoPayment
 from apps.payments.services import create_deposit, handle_deposit_success
-from apps.reports.services import get_overview_report
+from apps.reports.services import get_overview_report, get_daily_report
 
 
 def _has_dashboard_access(user):
@@ -44,6 +46,27 @@ def admin_dashboard_view(request):
             'active': 'dashboard',
         },
     )
+
+
+def admin_reports_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    report = get_overview_report()
+    today = timezone.localdate()
+    start_date = today - timedelta(days=6)
+    daily = get_daily_report(start_date, today)
+
+    return render(
+        request,
+        'web/admin_reports.html',
+        {
+            'report': report,
+            'daily': daily,
+            'active': 'reports',
+        },
+    )
+
 
 def admin_matches_view(request):
     if not _has_dashboard_access(request.user):
@@ -292,15 +315,14 @@ def register_view(request):
 
 
 def login_view(request):
-    # Login throttle: max 5 attempts per minute per email
-    lockout_key = 'login_lockout_{}'.format(request.POST.get('email', '').lower())
-    attempts_key = 'login_attempts_{}'.format(request.POST.get('email', '').lower())
-
     if request.method == 'POST':
         email = request.POST.get('email', '').strip()
         password = request.POST.get('password', '')
 
-        # If blocked, don't even authenticate
+        lockout_key = f'login_lockout_{email.lower()}'
+        attempts_key = f'login_attempts_{email.lower()}'
+
+        # Check if the account is temporarily locked
         if cache.get(lockout_key):
             return render(
                 request,
@@ -310,7 +332,7 @@ def login_view(request):
 
         user = authenticate(request, email=email, password=password)
         if user is not None:
-            # clear lockout counters
+            # Clear lockout counters after successful login
             cache.delete(attempts_key)
             cache.delete(lockout_key)
             auth_login(request, user)
