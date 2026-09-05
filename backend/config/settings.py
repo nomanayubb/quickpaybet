@@ -7,7 +7,7 @@ env = environ.Env(
     DEBUG=(bool, False),
     SECRET_KEY=(str, 'unsafe-default-change-me'),
     ALLOWED_HOSTS=(list, ['*']),
-    DATABASE_URL=(str, 'postgres://quickpaybet:quickpaybet@db:5432/quickpaybet'),
+    DATABASE_URL=(str, 'sqlite:///db.sqlite3'),
     REDIS_URL=(str, 'redis://redis:6379/0'),
     CORS_ALLOW_ALL_ORIGINS=(bool, True),
     EMAIL_BACKEND=(str, 'django.core.mail.backends.console.EmailBackend'),
@@ -80,7 +80,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
-    'default': env.db('DATABASE_URL', default='postgres://quickpaybet:quickpaybet@db:5432/quickpaybet')
+    'default': env.db('DATABASE_URL', default='sqlite:///db.sqlite3')
 }
 
 AUTH_USER_MODEL = 'accounts.User'
