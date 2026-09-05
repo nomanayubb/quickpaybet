@@ -8,7 +8,7 @@ class BaseOddsProvider:
     def __init__(self):
         self.name = 'base'
 
-    def fetch_matches(self) -> list[dict]:
+    def fetch_matches(self, sport_key=None) -> list[dict]:
         raise NotImplementedError
 
 
@@ -21,7 +21,7 @@ class MockOddsProvider(BaseOddsProvider):
     def __init__(self):
         self.name = 'mock'
 
-    def fetch_matches(self) -> list[dict]:
+    def fetch_matches(self, sport_key=None) -> list[dict]:
         return [
             {
                 'sport_slug': 'football',
@@ -79,11 +79,14 @@ class TheyOddsAPIProvider(BaseOddsProvider):
         with urllib.request.urlopen(request, timeout=20) as response:
             return json.loads(response.read().decode('utf-8'))
 
-    def fetch_matches(self) -> list[dict]:
+    def fetch_matches(self, sport_key=None) -> list[dict]:
         """Fetch scheduled matches / odds for a configured sport key."""
 
+        # Use the passed sport_key if provided, otherwise use the env default
+        key = sport_key or self.sport_key
+
         # Get odds from the real provider
-        path = f'/sports/{self.sport_key}/odds/?regions=eu&markets=h2h,draw'
+        path = f'/sports/{key}/odds/?regions=eu&markets=h2h,draw'
         raw_data = self._raw_get(path)
 
         if not isinstance(raw_data, list):
@@ -122,8 +125,8 @@ class TheyOddsAPIProvider(BaseOddsProvider):
                 continue
 
             normalized.append({
-                'sport_slug': 'football',          # The Odds API key is not a slug
-                'sport_name': event_data.get('sport_title', 'Football'),
+                'sport_slug': key,          # The Odds API key
+                'sport_name': event_data.get('sport_title', key),
                 'tournament_name': event_data.get('sport_title', ''),
                 'season': '',
                 'home_team': home_team,
