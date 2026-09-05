@@ -1,0 +1,29 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>All Matches</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Match</th>
+                <th>Sport / Tournament</th>
+                <th>Start</th>
+                <th>Status</th>
+                <th>Odds (H / D / A)</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for match in matches %}
+                <tr>
+                    <td>{{ match.home_team }} v {{ match.away_team }}</td>
+                    <td>{{ match.sport.name }} / {{ match.tournament.name|default:"-" }}</td>
+                    <td>{{ match.start_time }}</td>
+                    <td>{{ match.status }}</td>
+                    <td>{{ match.odds_home|default:"-" }} / {{ match.odds_draw|default:"-" }} / {{ match.odds_away|default:"-" }}</td>
+                    <td><a class="btn" href="{% url 'web:match_detail' match.pk %}">Open</a></td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

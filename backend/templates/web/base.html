@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuickPayBet</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f6f7fb;
+            color: #222;
+        }
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+        nav { background: #003366; color: white; padding: 12px 16px; }
+        nav a { color: white; text-decoration: none; margin-right: 14px; }
+        nav a:hover, nav a.active { text-decoration: underline; }
+        table { width: 100%; border-collapse: collapse; margin-top: 16px; background: white; }
+        th, td { padding: 10px 8px; border: 1px solid #ddd; text-align: left; }
+        th { background: #f0f0f0; }
+        .btn {
+            display: inline-block;
+            background: #0066cc;
+            color: white !important;
+            padding: 8px 14px;
+            text-decoration: none;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .btn:hover { background: #00509a; }
+        .error { background: #ffdddd; border: 1px solid #ffaaaa; padding: 8px; margin: 8px 0; }
+        input, select { padding: 8px; margin: 4px 0; }
+        .form-group { margin-bottom: 8px; }
+        .wallet-balance { font-size: 28px; font-weight: bold; margin-bottom: 20px; }
+        .pending-deposit { background: #fff3cd; border: 1px solid #ffc107; padding: 8px; margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <strong>QuickPayBet</strong>
+            <a href="{% url 'web:home' %}" class="{% if active == 'home' %}active{% endif %}">Home</a>
+            <a href="{% url 'web:matches' %}" class="{% if active == 'matches' %}active{% endif %}">Matches</a>
+            {% if user.is_authenticated %}
+                <a href="{% url 'web:wallet' %}" class="{% if active == 'wallet' %}active{% endif %}">Wallet</a>
+                <a href="{% url 'web:bets' %}" class="{% if active == 'bets' %}active{% endif %}">My Bets</a>
+                <a href="{% url 'web:logout' %}">Logout ({{ user.email }})</a>
+            {% else %}
+                <a href="{% url 'web:login' %}">Login</a>
+                <a href="{% url 'web:register' %}">Register</a>
+            {% endif %}
+        </div>
+    </nav>
+    <main class="container">
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

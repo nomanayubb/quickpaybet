@@ -1,0 +1,45 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h2>{{ match.home_team }} v {{ match.away_team }}</h2>
+    <p><strong>Sport:</strong> {{ match.sport.name }}</p>
+    <p><strong>Start:</strong> {{ match.start_time }}</p>
+    <p><strong>Status:</strong> {{ match.status }}</p>
+    <p><strong>Odds:</strong><br>
+        Home: {{ match.odds_home|default:"-" }}<br>
+        Draw: {{ match.odds_draw|default:"-" }}<br>
+        Away: {{ match.odds_away|default:"-" }}
+    </p>
+
+    {% if match.status == 'live' or match.status == 'scheduled' %}
+        <h3>Place a Bet</h3>
+        {% if not user.is_authenticated %}
+            <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to place a bet.</p>
+        {% else %}
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label>Selection</label>
+                    <select name="selection">
+                        <option value="home">Home – {{ match.odds_home|default:"-" }}</option>
+                        {% if match.odds_draw %}<option value="draw">Draw – {{ match.odds_draw }}</option>{% endif %}
+                        <option value="away">Away – {{ match.odds_away|default:"-" }}</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Stake</label>
+                    <input type="number" name="stake" step="0.01" min="0.01" required value="1">
+                </div>
+                <button type="submit" class="btn">Place Bet</button>
+            </form>
+        {% endif %}
+    {% else %}
+        <p>Betting is closed for this match.</p>
+    {% endif %}
+
+    {% if match.status == 'finished' %}
+        <p><strong>Result:</strong>
+            {% if match.home_score is not None %} {{ match.home_score }} : {{ match.away_score }} {% endif %}
+        </p>
+    {% endif %}
+{% endblock %}
