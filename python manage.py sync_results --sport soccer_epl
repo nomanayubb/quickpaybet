@@ -1,0 +1,28 @@
+
+---
+
+## Known Issues / Pitfalls
+
+1. **PowerShell `set` vs `$env:`**
+   - On Windows PowerShell, use `$env:VAR = "value"`, not `set VAR=value`.
+2. **“Football” provider key**
+   - The Odds API does not have a generic `football` key; we skip it.
+3. **Long loop over all active sports**
+   - With 86 sports and a free API quota, a full `sync_odds` / `sync_results` run will be slow and use many requests. Use `--sport` whenever possible.
+4. **`bet.services.settle_bets_for_match()` may rely on fields that are not present in all environments**
+   - The function expects a wallet to exist for every user. The signal `create_wallet_for_new_user` should handle that, but all existing users need to be checked.
+5. **The Odds API 422 response for “no odds available”**
+   - This is normal for many sports at certain times; treat it as an empty result.
+
+---
+
+## Next Goals
+
+1. Integrate `sync_sports`, `sync_odds`, and `sync_results` into **Celery periodic tasks** so they run automatically.
+2. Replace mock payment / wallet deposit / withdrawal with a confirmed real crypto provider (if required).
+3. Expand match odds to support more bet types (handicap, totals, etc.).
+4. Build a **proper risk/pricing model**—the current `pricing.normalize_odds` is a good starting point but only applies a fixed margin.
+5. Add admin pages for sports, tournaments, matches, bets, and payouts.
+6. Add live front‑end updates (WebSockets or polling).
+7. Test the full lifecycle: sport sync → odds sync → user places bet → result sync → bet settlement → wallet / commission credit.
+8. Deploy behind a production server with PostgreSQL, Redis, NGINX, and HTTPS.

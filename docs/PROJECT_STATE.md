@@ -1,39 +1,36 @@
-# Platform Project State & Roadmap
+# Platform Project State Overview
 
-This document captures the full project state, architecture, file purposes, and next steps based on the entire `.aider.chat.history.md` conversation and this session.
+Derived from the full `.aider.chat.history.md` and this chat session.
 
-## 1. Project Goal
+## Project Goal
 
-We are building a modern sports betting platform with:
+Build a modern, sport‑betting platform with a Django + DRF backend where users can:
 
-- User registration / authentication / password reset
-- Single and parlay betting
-- Wallet management and crypto deposits/withdrawals
-- Real-time odds synchronisation from an external provider
-- Automatic match and bet settlement when results arrive
-- Affiliate / master commission earnings
+- Register and login (JWT)
+- Place single bets on match results (1X2)
+- Place parlay bets (multiple selections)
+- Manage their wallet balance
+- Deposit and withdraw using crypto providers
+- Earn / receive affiliate commission on losing bets placed by referred users
+- See real sports odds from an external provider
+- Auto‑settle matches and bets when results arrive
 
-The immediate technical focus has been:
-
-- Connect Django to a real odds provider (The Odds API)
-- Store sport, tournament, match, and odds data
-- Normalise odds with a target margin
-- Automatically pull finished match results
-- Settle placed bets when results arrive
-
-The front‑end and many advanced features are still in early stages.
+The current focus has been to wire the **backend odds pipeline** into a functioning solution that the rest of the platform can build on.
 
 ---
 
-## 2. Current Technology Stack
+## Current Technology Stack
 
-- Backend: Django 5.2, Django REST Framework
-- Database: SQLite (development default) / PostgreSQL (production when `DATABASE_URL` is set)
-- Authentication: SimpleJWT
-- Background tasks / cache: Redis + Celery (configured in settings)
-- Odds provider: The Odds API
+| Component | Current Choice |
+|-----------|----------------|
+| Backend | Django 5.2, Django REST Framework |
+| Database | SQLite (development default) / PostgreSQL (when `DATABASE_URL` points to postgres) |
+| Cache / Celery Broker | Redis (via `REDIS_URL`) |
+| Async Queue | Celery configured in `settings.py` |
+| Real‑time odds provider | The Odds API |
+| Auth | SimpleJWT |
 
 ---
 
-## 3. Repository Layout
+## Repository Layout (Backend)
 
