@@ -1,8 +1,8 @@
 # QuickPayBet
 
-A modular, multi‑role betting platform with real‑time odds, cryptocurrency payments, and an extensible admin panel.
+A modular, multi‑role betting platform with real‑time odds, cryptocurrency payments, and an extensible Django admin panel.
 
-**Status:** MVP Backend in Development  
+**Status:** MVP Backend + Django Template UI  
 **Docs:** See `docs/` for architecture, tech stack, and roadmap.
 
 ## Goals
@@ -12,23 +12,26 @@ A modular, multi‑role betting platform with real‑time odds, cryptocurrency p
 - High extensibility for future features (casino, more payment methods, live odds providers, etc.).
 - Strict security and auditability.
 
-## Current Backend Capabilities
+## Current Capabilities
 
 | Feature | Status |
 |---------|--------|
 | Custom user model (email login) with roles (user/agent/master/admin) | Implemented |
-| JWT authentication (register, login, refresh, `/me`) | Implemented |
-| User hierarchy (`parent` field) and betting limits | Implemented |
-| Wallet + transaction history + atomic deposit/withdrawal | Implemented (mock crypto flow) |
-| Sports, tournaments, matches and odds | Implemented (manual admin/admin API) |
+| Session login/registration for HTML UI | Implemented |
+| JWT authentication (register, login, refresh) for API | Implemented |
+| User hierarchy (`parent`) and betting limits | Implemented |
+| Wallet + transaction history + atomic deposit/withdrawal | Implemented (mock crypto flow + webhook confirmation) |
+| Sports, tournaments, matches and odds | Implemented |
 | Odds provider adapter (mock / skeleton for real) | Added |
-| Match sync from provider (management command) | Added |
-| Auto‑mark matches LIVE when start_time passes | Added (Celery task) |
-| Bet placement, user bet list | Implemented |
+| Match sync from provider (management command `sync_odds`) | Added |
+| Auto‑mark matches `LIVE` when start time passes | Added (Celery task) |
+| Bet placement (web form + API) | Implemented |
 | Bet settlement / refund services | Implemented |
 | Auto‑settlement Celery task | Implemented |
 | Admin actions to settle/cancel matches | Implemented |
-| Reporting overview & daily report | Implemented |
+| Reporting overview & daily report (API) | Implemented |
+| Django template UI (home, matches, match detail, wallet, bets) | Implemented |
 | Docker + Docker Compose for local development | Implemented |
 
 ## Repository Layout
+

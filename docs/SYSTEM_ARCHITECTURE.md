@@ -3,16 +3,17 @@
 ## Logical Modules
 ~~~mermaid
 graph TD
-    User[Browser User] -->|Next.js| Frontend
-    Agent/Admin -->|Next.js Admin| FrontendAdmin
+    User[Browser User] -->|HTTP| DjangoTemplates
+    Agent/Admin -->|HTTP| DjangoAdmin
 
-    Frontend -->|REST/API| API(Gateway: Django REST)
-    FrontendAdmin -->|REST/API| API
-    API --> Auth[Accounts & Permissions]
-    API --> Matches[Matches & Odds]
-    API --> Bets[Betting Engine]
-    API --> Wallet[Wallet / Payments]
-    API --> Reports[Reporting & Audit]
+    DjangoTemplates -->|Server Rendering| Django
+    DjangoAdmin -->|Django Admin| Django
+
+    Django --> Auth[Accounts & Permissions]
+    Django --> Matches[Matches & Odds]
+    Django --> Bets[Betting Engine]
+    Django --> Wallet[Wallet / Payments]
+    Django --> Reports[Reporting & Audit]
 
     Wallet -->|Async Jobs| Celery
     Celery --> Payments[Crypto Gateway Adapter]
@@ -24,8 +25,8 @@ graph TD
     Bets --> Settlement[Settlement Worker]
     Settlement --> Results[Results Service]
 
-    Database[(PostgreSQL)] --> API
-    Redis[(Redis)] -->|Cache| API
+    Database[(PostgreSQL)] --> Django
+    Redis[(Redis)] -->|Cache| Django
     Redis[(Redis)] -->|Broker| Celery
 ~~~
 
@@ -33,27 +34,34 @@ graph TD
 
 **Deposit**  
 1. User selects crypto coin.  
-2. API creates a NOWPayments invoice.  
-3. Celery worker polls or uses webhook to confirm payment.  
-4. Wallet balance credited atomically.
+2. Server stores a `CryptoPayment` record in `PENDING` status.  
+3. User sees a deposit address (mock or real).  
+4. Provider webhook confirms payment.  
+5. `deposit_funds` credits wallet in a database transaction.
 
 **Bet Placement**  
-1. User locks in odds and stake.  
-2. Funds are reserved (or debited) in a transactional block.  
-3. Bet stored with status `PENDING`.  
+1. User selects outcome and stake.  
+2. Funds are reserved (subtracted) in a transaction.  
+3. `Bet` record created with `PENDING` status.  
+4. During settlement, wallets are updated automatically.
 
 **Settlement**  
-1. Celery sees match result.  
+1. Celery sees a finished match with scores.  
 2. Determines winning bets.  
 3. Updates balances and sets bet status `WON` or `LOST`.  
-4. Every action logged in audit trail.
+4. Every action is logged in audit trail.
 
 **Admin Overrides**  
 Admin can manually adjust odds / result / payout before final settlement.  
-All manual actions require permission and are logged.
+All manual actions happen in Django admin and are logged.
 
-## Data Flow Highlights
-- All monetary operations are wrapped in `transaction.atomic()`.  
-- Balance is checked and updated atomically to prevent race conditions.  
-- External service calls are always async via Celery, never in request path.  
-- Audit table stores every change with actor, timestamp, and reason.
+## Environment Components
+- **Django** – serves both the public (`web/apps/web/views.py`) and the API (`api/` endpoints).  
+- **Redis** – used as Celery broker and for caching.  
+- **PostgreSQL** – stores all persistent data.  
+- **Celery** – runs settlement and match status tasks.
+
+## API and UI Together
+- Public HTML pages are rendered by Django templates.  
+- An internal REST API is exposed for mobile clients and future SPA frontends.  
+- Same core services (`services.py`) are used by both the templates and the API.

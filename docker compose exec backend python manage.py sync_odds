@@ -1,0 +1,60 @@
+
+## Main API Endpoints
+
+All API routes are under `/api/` and accept JSON.
+
+### Auth
+- `POST /api/auth/register/`
+- `POST /api/auth/login/`
+- `POST /api/auth/refresh/`
+- `GET /api/auth/me/` — JWT protected
+
+### Wallet
+- `GET /api/wallet/`
+- `GET /api/wallet/transactions/`
+- `POST /api/wallet/deposit/`
+- `POST /api/wallet/withdraw/`
+
+### Sports
+- `GET /api/sports/`
+- `GET /api/matches/`
+- `GET /api/matches/{id}/`
+- `PATCH /api/matches/{id}/update-odds/` — admin/master
+
+### Bets
+- `POST /api/bets/place/`
+- `GET /api/bets/`
+
+### Reports
+- `GET /api/reports/overview/` — admin/master
+- `GET /api/reports/daily/` — admin/master
+
+### Audit
+- `GET /api/admin/audit-logs/` — admin/master
+
+### Payments (webhook for deposit confirmation)
+- `POST /api/payments/webhook/`
+
+## Public Web Routes
+
+| Path | Purpose |
+|------|---------|
+| `/` | Home page showing next matches |
+| `/register/` | Create account |
+| `/login/` | Session login |
+| `/logout/` | Session logout |
+| `/matches/` | All matches list |
+| `/matches/{id}/` | Match detail + bet placement form |
+| `/wallet/` | View wallet, pending deposits, make deposit/withdraw |
+| `/bets/` | View user bet history |
+
+## Environment
+Copy `backend/.env.example` to `backend/.env` for non‑Docker development.  
+Docker Compose already passes suitable defaults.
+
+## Next Steps (see roadmap for details)
+- Integrate a real crypto gateway (NOWPayments adapter).
+- Add real odds provider with scheduled ingestion.
+- Add password reset email templates.
+- Build a custom admin dashboard (instead of relying on Django admin only).
+- Add more bet types and cash‑out.
