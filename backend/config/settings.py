@@ -31,6 +31,10 @@ INSTALLED_APPS = [
     'corsheaders',
     # local apps
     'apps.accounts',
+    'apps.wallet',
+    'apps.sports',
+    'apps.bets',
+    'apps.reports',
 ]
 
 MIDDLEWARE = [
