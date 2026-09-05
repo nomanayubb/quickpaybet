@@ -38,3 +38,13 @@ class RegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop('password2')
         return User.objects.create_user(**validated_data)
+
+
+class AdminUserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = (
+            'id', 'email', 'role', 'parent', 'first_name', 'last_name',
+            'min_bet_amount', 'max_bet_amount', 'is_betting_enabled'
+        )
+        read_only_fields = ('id', 'email')

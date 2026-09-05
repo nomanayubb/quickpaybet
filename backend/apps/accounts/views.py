@@ -3,7 +3,8 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .serializers import RegisterSerializer, UserSerializer
+from .permissions import IsAdminOrMaster
+from .serializers import RegisterSerializer, UserSerializer, AdminUserUpdateSerializer
 
 User = get_user_model()
 
@@ -31,3 +32,9 @@ class MeView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class AdminUserUpdateView(generics.RetrieveUpdateAPIView):
+    serializer_class = AdminUserUpdateSerializer
+    queryset = User.objects.all()
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrMaster]

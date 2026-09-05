@@ -1,7 +1,8 @@
 from rest_framework import generics, permissions
 
 from .models import Sport, Match
-from .serializers import SportSerializer, MatchSerializer
+from .serializers import SportSerializer, MatchSerializer, MatchOddsUpdateSerializer
+from .permissions import IsAdminOrMaster
 
 
 class SportListView(generics.ListAPIView):
@@ -20,3 +21,9 @@ class MatchDetailView(generics.RetrieveAPIView):
     serializer_class = MatchSerializer
     permission_classes = [permissions.AllowAny]
     queryset = Match.objects.select_related('sport', 'tournament')
+
+
+class MatchOddsUpdateView(generics.UpdateAPIView):
+    serializer_class = MatchOddsUpdateSerializer
+    queryset = Match.objects.all()
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrMaster]

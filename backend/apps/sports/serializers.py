@@ -50,3 +50,10 @@ class MatchSerializer(serializers.ModelSerializer):
             'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
+
+
+class MatchOddsUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Match
+        fields = ('id', 'odds_home', 'odds_draw', 'odds_away', 'status')
+        read_only_fields = ('id',)
