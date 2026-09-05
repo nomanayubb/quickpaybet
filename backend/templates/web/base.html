@@ -53,6 +53,7 @@
             color: #555;
             font-size: 14px;
         }
+        .inline-form { display: inline-block; margin-left: 6px; }
     </style>
 </head>
 <body>
@@ -64,6 +65,7 @@
             {% if user.is_authenticated %}
                 {% if user.is_staff or user.role == 'admin' or user.role == 'master' %}
                     <a href="{% url 'web:dashboard' %}" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a>
+                    <a href="{% url 'web:admin_matches' %}" class="{% if active == 'admin_matches' %}active{% endif %}">Manage Matches</a>
                 {% endif %}
                 <a href="{% url 'web:wallet' %}" class="{% if active == 'wallet' %}active{% endif %}">Wallet</a>
                 <a href="{% url 'web:bets' %}" class="{% if active == 'bets' %}active{% endif %}">My Bets</a>

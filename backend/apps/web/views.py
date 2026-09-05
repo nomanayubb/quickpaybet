@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 
 from apps.accounts.models import User
 from apps.bets.models import Bet
-from apps.bets.services import place_bet, refund_bet
+from apps.bets.services import place_bet, refund_bet, settle_bets_for_match
 from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
@@ -40,6 +40,82 @@ def admin_dashboard_view(request):
             'active': 'dashboard',
         },
     )
+
+def admin_matches_view(request):
+    if not (
+        request.user.is_authenticated
+        and (
+            request.user.is_staff
+            or request.user.role in (User.Role.ADMIN, User.Role.MASTER)
+        )
+    ):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    matches = Match.objects.select_related('sport', 'tournament').order_by('start_time')
+    return render(
+        request,
+        'web/admin_matches.html',
+        {
+            'matches': matches,
+            'active': 'admin_matches',
+        },
+    )
+
+
+def admin_settle_match_view(request, match_id):
+    if not (
+        request.user.is_authenticated
+        and (
+            request.user.is_staff
+            or request.user.role in (User.Role.ADMIN, User.Role.MASTER)
+        )
+    ):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    if request.method != 'POST':
+        return redirect('web:admin_matches')
+
+    match = get_object_or_404(Match, pk=match_id)
+
+    try:
+        home_score = request.POST.get('home_score')
+        away_score = request.POST.get('away_score')
+        if home_score is not None and away_score is not None:
+            match.home_score = int(home_score)
+            match.away_score = int(away_score)
+        match.status = Match.Status.FINISHED
+        match.save()
+        settle_bets_for_match(match)
+    except (ValueError, ValidationError):
+        pass
+
+    return redirect('web:admin_matches')
+
+
+def admin_cancel_match_view(request, match_id):
+    if not (
+        request.user.is_authenticated
+        and (
+            request.user.is_staff
+            or request.user.role in (User.Role.ADMIN, User.Role.MASTER)
+        )
+    ):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    if request.method != 'POST':
+        return redirect('web:admin_matches')
+
+    match = get_object_or_404(Match, pk=match_id)
+
+    pending_bets = Bet.objects.filter(match=match, status=Bet.Status.PENDING)
+    for bet in pending_bets:
+        refund_bet(bet)
+
+    match.status = Match.Status.CANCELLED
+    match.save()
+
+    return redirect('web:admin_matches')
+
 
 def home_view(request):
     matches = Match.objects.select_related('sport', 'tournament').filter(
