@@ -17,6 +17,7 @@ from .views import (
     wallet_view,
     wallet_deposit_view,
     wallet_withdraw_view,
+    confirm_deposit_view,
     bet_history_view,
 )
 
@@ -38,5 +39,6 @@ urlpatterns = [
     path('wallet/', wallet_view, name='wallet'),
     path('wallet/deposit/', wallet_deposit_view, name='wallet_deposit'),
     path('wallet/withdraw/', wallet_withdraw_view, name='wallet_withdraw'),
+    path('wallet/confirm-deposit/<int:deposit_id>/', confirm_deposit_view, name='confirm_deposit'),
     path('bets/', bet_history_view, name='bets'),
 ]

@@ -15,6 +15,10 @@
                 Address: <code>{{ deposit.address }}</code><br>
                 External ID: <code>{{ deposit.external_id }}</code><br>
                 Awaiting payment confirmation.
+                <form method="post" action="{% url 'web:confirm_deposit' deposit.id %}" style="display:inline; margin-left:8px;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn">Confirm (dev)</button>
+                </form>
             </div>
         {% endfor %}
     {% endif %}

@@ -15,7 +15,7 @@ from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
 from apps.payments.models import CryptoPayment
-from apps.payments.services import create_deposit
+from apps.payments.services import create_deposit, handle_deposit_success
 from apps.reports.services import get_overview_report
 
 
@@ -354,6 +354,28 @@ def wallet_withdraw_view(request):
         )
         return redirect('web:wallet')
     except (ValueError, ValidationError, InvalidOperation) as exc:
+        return render(
+            request,
+            'web/wallet.html',
+            {'error': str(exc)},
+        )
+
+
+@login_required
+@require_POST
+def confirm_deposit_view(request, deposit_id):
+    deposit = get_object_or_404(
+        CryptoPayment,
+        pk=deposit_id,
+        user=request.user,
+        payment_type=CryptoPayment.PaymentType.DEPOSIT,
+        status=CryptoPayment.Status.PENDING,
+    )
+
+    try:
+        handle_deposit_success(deposit.external_id)
+        return redirect('web:wallet')
+    except ValidationError as exc:
         return render(
             request,
             'web/wallet.html',
