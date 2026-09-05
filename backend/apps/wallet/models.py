@@ -32,6 +32,7 @@ class WalletTransaction(models.Model):
         BET_PLACED = 'bet_placed', 'Bet Placed'
         BET_WON = 'bet_won', 'Bet Won'
         BET_REFUND = 'bet_refund', 'Bet Refund'
+        COMMISSION = 'commission', 'Commission'
         ADJUSTMENT = 'adjustment', 'Adjustment'
 
     class Status(models.TextChoices):

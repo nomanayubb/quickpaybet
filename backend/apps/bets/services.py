@@ -75,6 +75,43 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
     return bet
 
 
+def _credit_affiliate_commission(bet: Bet):
+    """Credit the direct parent a percentage of the losing stake.
+
+    Only called when a single bet is settled as LOST. If the parent is
+    missing or has no commission rate, nothing happens.
+    """
+    user = bet.user
+    parent = user.parent
+    if parent is None:
+        return
+
+    rate = parent.commission_rate
+    if rate is None or rate <= 0:
+        return
+
+    commission = (bet.stake * rate) / Decimal('100')
+    if commission <= 0:
+        return
+
+    try:
+        parent_wallet = Wallet.objects.select_for_update().get(user=parent)
+    except Wallet.DoesNotExist:
+        return
+
+    parent_wallet.balance += commission
+    parent_wallet.save(update_fields=['balance', 'updated_at'])
+
+    WalletTransaction.objects.create(
+        wallet=parent_wallet,
+        txn_type=WalletTransaction.TxnType.COMMISSION,
+        amount=commission,
+        status=WalletTransaction.Status.COMPLETED,
+        balance_after=parent_wallet.balance,
+        description=f'Commission on losing bet #{bet.id} from {user.email}',
+    )
+
+
 def place_parlay_bet(user, stake: Decimal, selections: list):
     """
     selections : list of dicts -> [{'match': int, 'selection': 'home'}, ...]
@@ -270,6 +307,7 @@ def settle_bet(bet: Bet, match_result: str):
     else:
         bet.status = Bet.Status.LOST
         bet.save(update_fields=['status', 'updated_at'])
+        _credit_affiliate_commission(bet)
 
 
 def refund_bet(bet: Bet):

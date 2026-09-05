@@ -27,6 +27,12 @@ class User(AbstractUser):
         related_name='children',
         verbose_name=_('Parent user (agent/master)'),
     )
+    commission_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        verbose_name=_('Commission rate (%) on losing bets of direct children'),
+    )
     min_bet_amount = models.DecimalField(
         max_digits=20,
         decimal_places=8,
