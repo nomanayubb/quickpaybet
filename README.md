@@ -21,8 +21,12 @@ A modular, multi‑role betting platform with real‑time odds, cryptocurrency p
 | User hierarchy (`parent` field) and betting limits | Implemented |
 | Wallet + transaction history + atomic deposit/withdrawal | Implemented (mock crypto flow) |
 | Sports, tournaments, matches and odds | Implemented (manual admin/admin API) |
+| Odds provider adapter (mock / skeleton for real) | Added |
+| Match sync from provider (management command) | Added |
+| Auto‑mark matches LIVE when start_time passes | Added (Celery task) |
 | Bet placement, user bet list | Implemented |
 | Bet settlement / refund services | Implemented |
+| Auto‑settlement Celery task | Implemented |
 | Admin actions to settle/cancel matches | Implemented |
 | Reporting overview & daily report | Implemented |
 | Docker + Docker Compose for local development | Implemented |

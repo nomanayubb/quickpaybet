@@ -13,4 +13,8 @@ app.conf.beat_schedule = {
         'task': 'apps.bets.tasks.settle_matches_with_results',
         'schedule': crontab(minute='*/5'),
     },
+    'mark-starting-matches-live': {
+        'task': 'apps.bets.tasks.mark_starting_matches_live',
+        'schedule': crontab(minute='*'),
+    },
 }

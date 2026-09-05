@@ -12,10 +12,6 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def settle_match(match_id: int) -> int:
-    """
-    Settle all pending bets for one finished match.
-    Returns the number of bets settled.
-    """
     try:
         match = Match.objects.get(pk=match_id)
     except Match.DoesNotExist:
@@ -45,10 +41,6 @@ def settle_match(match_id: int) -> int:
 
 @shared_task
 def settle_matches_with_results() -> int:
-    """
-    Find all finished matches that still have pending bets and settle them.
-    Runs periodically via Celery Beat.
-    """
     match_ids = (
         Match.objects.filter(
             status=Match.Status.FINISHED,
@@ -64,7 +56,24 @@ def settle_matches_with_results() -> int:
     for match_id in match_ids:
         try:
             total_settled += settle_match(match_id)
-        except Exception as exc:  # noqa: BLE001 - log and continue with next match
+        except Exception as exc:
             logger.exception('Failed to settle match %s: %s', match_id, exc)
 
     return total_settled
+
+
+@shared_task
+def mark_starting_matches_live():
+    """
+    Automatically switches scheduled matches to LIVE once their start_time has passed.
+    This ensures that odds are frozen and no new bets can be placed after the game begins.
+    """
+    now = timezone.now()
+    started_matches = Match.objects.filter(
+        status=Match.Status.SCHEDULED,
+        start_time__lte=now,
+    )
+    updated_count = started_matches.update(status=Match.Status.LIVE)
+    if updated_count:
+        logger.info('Marked %s match(es) as LIVE', updated_count)
+    return updated_count
