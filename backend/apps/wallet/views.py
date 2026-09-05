@@ -1,7 +1,14 @@
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, status
+from rest_framework.response import Response
 
 from .models import Wallet, WalletTransaction
-from .serializers import WalletSerializer, WalletTransactionSerializer
+from .serializers import (
+    WalletSerializer,
+    WalletTransactionSerializer,
+    DepositSerializer,
+    WithdrawSerializer,
+)
+from .services import deposit_funds, withdraw_funds
 
 
 class WalletDetailView(generics.RetrieveAPIView):
@@ -20,3 +27,49 @@ class WalletTransactionListView(generics.ListAPIView):
     def get_queryset(self):
         wallet, _ = Wallet.objects.get_or_create(user=self.request.user)
         return WalletTransaction.objects.filter(wallet=wallet)
+
+
+class DepositView(generics.CreateAPIView):
+    serializer_class = DepositSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        txn = deposit_funds(
+            user=request.user,
+            amount=serializer.validated_data['amount'],
+            description=f"Crypto deposit via {serializer.validated_data.get('currency', 'USDT')}",
+        )
+        wallet = txn.wallet
+        return Response(
+            {
+                'transaction': WalletTransactionSerializer(txn).data,
+                'wallet': WalletSerializer(wallet).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class WithdrawView(generics.CreateAPIView):
+    serializer_class = WithdrawSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        txn = withdraw_funds(
+            user=request.user,
+            amount=serializer.validated_data['amount'],
+            description=f"Crypto withdrawal to {serializer.validated_data['address']} via {serializer.validated_data.get('currency', 'USDT')}",
+        )
+        wallet = txn.wallet
+        return Response(
+            {
+                'transaction': WalletTransactionSerializer(txn).data,
+                'wallet': WalletSerializer(wallet).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )

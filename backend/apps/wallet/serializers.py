@@ -33,3 +33,26 @@ class WalletTransactionSerializer(serializers.ModelSerializer):
         read_only_fields = (
             'id', 'wallet', 'balance_after', 'created_at', 'updated_at'
         )
+
+
+class DepositSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=20, decimal_places=8)
+    currency = serializers.CharField(max_length=20, default='USDT', required=False)
+
+    def validate(self, attrs):
+        if attrs.get('amount') <= 0:
+            raise serializers.ValidationError('Amount must be positive.')
+        return attrs
+
+
+class WithdrawSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=20, decimal_places=8)
+    address = serializers.CharField(max_length=255)
+    currency = serializers.CharField(max_length=20, default='USDT', required=False)
+
+    def validate(self, attrs):
+        if attrs.get('amount') <= 0:
+            raise serializers.ValidationError('Amount must be positive.')
+        if not attrs.get('address'):
+            raise serializers.ValidationError('Withdrawal address is required.')
+        return attrs
