@@ -1,0 +1,213 @@
+
+---
+
+## 4. Key Modules and Their Purpose
+
+### `backend/apps/sports/models.py`
+
+**Purpose:**  
+Defines the sports data model.
+
+**Key fields:**  
+- `Sport`: `name`, `slug`, `provider_key`, `is_active`  
+- `Tournament`: links to `Sport`, stores tournament name and season  
+- `Match`: links to `Sport` and `Tournament`, stores teams, start time, status, scores, and odds
+
+The `provider_key` on `Sport` is the external API key used by The Odds API, e.g. `soccer_epl`.
+
+---
+
+### `backend/apps/sports/providers.py`
+
+**Purpose:**  
+Abstraction layer for fetching sports, matches, and scores from an external provider.
+
+**Provider classes:**  
+- `BaseOddsProvider`  
+- `MockOddsProvider` – development/demo  
+- `TheyOddsAPIProvider` – real The Odds API
+
+**Methods:**  
+- `fetch_sports()`  
+- `fetch_matches(sport_key=None)`  
+- `fetch_scores(sport_key=None)`
+
+**Environment variables used:**  
+- `ODDS_PROVIDER` ("mock" or "theoddsapi")  
+- `ODDS_API_KEY`  
+- `ODDS_SPORT_KEY`  
+- `ODDS_API_URL`
+
+`INVALID_PROVIDER_KEYS = {'football'}` is present because The Odds API has no generic “football” sport key.
+
+---
+
+### `backend/apps/sports/pricing.py`
+
+**Purpose:**  
+Odds normalisation and margin calculation.
+
+**Functions:**  
+- `compute_margin(odds_home, odds_draw, odds_away)`  
+- `normalize_odds(odds_home, odds_draw, odds_away, margin=0.05)`
+
+It removes the bookmaker’s original overround and re-applies your target margin.  
+It also handles two‑outcome markets (e.g. tennis) where `odds_draw` may be `None`.
+
+---
+
+### `backend/apps/sports/management/commands/sync_sports.py`
+
+**Purpose:**  
+Fetches the list of supported sports from The Odds API and inserts/updates the `Sport` model.
+
+**Usage:**  
+- `python manage.py sync_sports`
+
+It skips invalid provider keys such as `football`.
+
+---
+
+### `backend/apps/sports/management/commands/sync_odds.py`
+
+**Purpose:**  
+Fetches upcoming matches and 1X2 odds for each active sport that has a `provider_key`.
+
+**Usage:**  
+- `python manage.py sync_odds`  
+- `python manage.py sync_odds --sport soccer_epl`  
+- `python manage.py sync_odds --margin 0.05`
+
+It normalises raw odds using `pricing.normalize_odds` and upserts matches into the database.
+
+---
+
+### `backend/apps/sports/management/commands/sync_results.py`
+
+**Purpose:**  
+Fetches final scores / results from The Odds API, updates local match status and score, then calls `settle_bets_for_match`.
+
+**Usage:**  
+- `python manage.py sync_results`  
+- `python manage.py sync_results --sport soccer_epl`
+
+Only matches that already exist locally are updated. No matches are created from results.
+
+---
+
+### `backend/apps/sports/migrations/0002_sport_provider_key.py`
+
+**Purpose:**  
+Adds the `provider_key` field to the `Sport` model.
+
+**Command:**  
+- `python manage.py migrate`
+
+---
+
+### `backend/apps/bets/services.py`
+
+**Purpose:**  
+Core business logic for placing and settling bets:
+
+- Single bet placing
+- Parlay bet placing
+- Bet settlement
+- Bet refund for cancelled matches
+- Parlay settlement once all legs resolve
+- Affiliate commission on losing bets
+- Calling this from `sync_results.py` automatically settles bets after results arrive
+
+This file is required for the automated result → bet settlement pipeline.
+
+---
+
+### `backend/config/settings.py`
+
+**Purpose:**  
+Central Django configuration.
+
+The default database has been changed to SQLite:
+
+- `DATABASE_URL=sqlite:///db.sqlite3`
+
+PostgreSQL can still be used by setting the real `DATABASE_URL`, e.g.  
+`postgres://user:password@localhost/dbname`
+
+---
+
+### `backend/manage.py`
+
+**Purpose:**  
+Standard Django management entrypoint.
+
+---
+
+### `backend/requirements.txt`
+
+Contains:
+
+- Django 5.2  
+- Django REST Framework  
+- django-cors-headers  
+- django-environ  
+- psycopg2-binary  
+- redis  
+- celery  
+- djangorestframework-simplejwt  
+- gunicorn
+
+---
+
+## 5. Odds API Status
+
+**Provider:** The Odds API  
+**API Key (development):** `245cab3c5cff52364fa847df4171e64f`
+
+### Verified / Working
+
+- `sync_sports` has successfully imported 86 sports.
+- `sync_odds --sport soccer_epl` works without crashing.
+- The provider now tolerates 404 and 422 API errors.
+- `sync_results --sport soccer_epl` is prepared but has not been fully validated with real finished matches yet.
+
+### Request Quota Warning
+
+The free tier of The Odds API is limited (~500 requests/month).  
+Full `sync_odds` / `sync_results` over all active sports uses many requests and should be avoided during development.
+
+---
+
+## 6. Known Issues / Pitfalls
+
+1. PowerShell must use `$env:VAR = "value"`, not `set VAR=value`.
+2. The Odds API has no generic “football” key; that key is skipped.
+3. Full‑sync commands over 86 sports are slow and exhaust the free quota.
+4. `sync_results.py` requires matches to already exist locally.
+5. `settle_bets_for_match()` assumes every user has a wallet. The `post_save` signal should create wallets for new users, but old users need manual validation.
+6. Some sports will return 422 because no odds are currently available – that is normal and should be treated as an empty result.
+
+---
+
+## 7. Recommended Next Steps
+
+1. Add Celery Beat periodic tasks for:
+   - `sync_sports`
+   - `sync_odds`
+   - `sync_results`
+2. During development, only sync a single sport to save API quota:
+   - `python manage.py sync_odds --sport soccer_epl`
+   - `python manage.py sync_results --sport soccer_epl`
+3. Verify the complete flow with one real match:
+   - Place a bet using the API
+   - Let the match finish
+   - Run `sync_results` and confirm the bet is settled
+4. Build a more advanced pricing/risk model.
+5. Replace mock crypto payments with a real provider.
+6. Add admin pages for sports, tournaments, matches, bets, and payouts.
+7. Add WebSocket/polling for live scores and odds.
+8. Deploy with PostgreSQL, Redis, NGINX, HTTPS, and backup.
+
+---
+
+*End of project state.*
