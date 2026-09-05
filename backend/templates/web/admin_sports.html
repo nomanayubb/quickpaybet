@@ -1,0 +1,80 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Manage Sports &amp; Tournaments</h1>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <h3>Add a New Sport</h3>
+    <form method="post" style="margin-bottom: 32px;">
+        {% csrf_token %}
+        <input type="hidden" name="form_type" value="sport">
+        <div class="form-group">
+            <label>Sport name</label>
+            <input type="text" name="name" required>
+        </div>
+        <div class="form-group">
+            <label>Slug (unique, e.g., football)</label>
+            <input type="text" name="slug" required>
+        </div>
+        <button type="submit" class="btn">Create Sport</button>
+    </form>
+
+    <h3>Add a New Tournament</h3>
+    <form method="post" style="margin-bottom: 32px;">
+        {% csrf_token %}
+        <input type="hidden" name="form_type" value="tournament">
+        <div class="form-group">
+            <label>Sport</label>
+            <select name="sport_id" required>
+                <option value="">— Pick a sport —</option>
+                {% for sport in sports %}
+                    <option value="{{ sport.id }}">{{ sport.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Tournament name</label>
+            <input type="text" name="name" required>
+        </div>
+        <div class="form-group">
+            <label>Season (optional)</label>
+            <input type="text" name="season" placeholder="e.g., 2025/26">
+        </div>
+        <button type="submit" class="btn">Create Tournament</button>
+    </form>
+
+    <h3>All Sports</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Slug</th>
+                <th>Active</th>
+                <th>Tournaments</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sport in sports %}
+                <tr>
+                    <td>{{ sport.name }}</td>
+                    <td>{{ sport.slug }}</td>
+                    <td>{{ sport.is_active|yesno:"Yes,No" }}</td>
+                    <td>
+                        <ul>
+                            {% for tournament in sport.tournaments.all %}
+                                <li>{{ tournament.name }} <span style="color:#888;">({{ tournament.season|default:"—" }})</span></li>
+                            {% empty %}
+                                <li>None yet</li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="4">No sports available. Add one above.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

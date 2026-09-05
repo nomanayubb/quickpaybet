@@ -16,7 +16,7 @@ from apps.accounts.models import User, PasswordResetToken
 from apps.audit.models import AuditLog
 from apps.bets.models import Bet, ParlayBet
 from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
-from apps.sports.models import Match
+from apps.sports.models import Match, Sport, Tournament
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
 from apps.payments.models import CryptoPayment
@@ -64,6 +64,58 @@ def admin_reports_view(request):
             'report': report,
             'daily': daily,
             'active': 'reports',
+        },
+    )
+
+
+def admin_sports_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    sports = Sport.objects.prefetch_related('tournaments').order_by('name')
+    error = None
+
+    if request.method == 'POST':
+        form_type = request.POST.get('form_type')
+        try:
+            if form_type == 'sport':
+                name = request.POST.get('name', '').strip()
+                slug = request.POST.get('slug', '').strip()
+                if not name or not slug:
+                    raise ValidationError('Sport name and slug are required.')
+                if Sport.objects.filter(slug=slug).exists():
+                    raise ValidationError('Sport with this slug already exists.')
+                Sport.objects.create(name=name, slug=slug)
+            elif form_type == 'tournament':
+                sport_id = request.POST.get('sport_id', '')
+                name = request.POST.get('name', '').strip()
+                season = request.POST.get('season', '').strip()
+                try:
+                    sport = Sport.objects.get(pk=sport_id)
+                except Sport.DoesNotExist:
+                    raise ValidationError('Selected sport does not exist.')
+                if not name:
+                    raise ValidationError('Tournament name is required.')
+                Tournament.objects.create(sport=sport, name=name, season=season)
+            else:
+                raise ValidationError('Invalid form.')
+        except ValidationError as exc:
+            error = str(exc)
+        except Exception as exc:
+            error = str(exc)
+
+        if not error:
+            return redirect('web:admin_sports')
+        else:
+            sports = Sport.objects.prefetch_related('tournaments').order_by('name')
+
+    return render(
+        request,
+        'web/admin_sports.html',
+        {
+            'sports': sports,
+            'error': error,
+            'active': 'admin_sports',
         },
     )
 
