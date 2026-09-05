@@ -1,3 +1,7 @@
+# Insert this view into the existing file at the correct location.
+# The entire updated file is shown only for the admin_audit_logs_view function,
+# but for correctness you should replace the whole file with the one below.
+
 from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import authenticate
@@ -314,7 +318,7 @@ def admin_cancel_match_view(request, match_id):
 
     match.status = Match.Status.CANCELLED
     match.save()
-    # This refunds pending single bets and marks parlay legs as refunded
+    # This refunds single bets and marks parlay legs as refunded
     settle_bets_for_match(match)
 
     return redirect('web:admin_matches')
@@ -324,7 +328,15 @@ def admin_audit_logs_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
+    user_email = request.GET.get('user_email', '').strip()
+    action = request.GET.get('action', '').strip()
+
     logs_list = AuditLog.objects.select_related('user').order_by('-created_at')
+    if user_email:
+        logs_list = logs_list.filter(user__email__icontains=user_email)
+    if action:
+        logs_list = logs_list.filter(action__icontains=action)
+
     paginator = Paginator(logs_list, 20)
     page_number = request.GET.get('page')
     logs = paginator.get_page(page_number)
@@ -335,6 +347,8 @@ def admin_audit_logs_view(request):
         {
             'logs': logs,
             'page_obj': logs,
+            'user_email': user_email,
+            'action_filter': action,
             'active': 'audit',
         },
     )
@@ -436,7 +450,7 @@ def admin_user_update_view(request, user_id):
 
 def home_view(request):
     matches = Match.objects.select_related('sport', 'tournament').filter(
-        status__in=[Match.Status.SCHEDULED, Match.Status.LIVE]
+        status__in=[Match.Status.SCHEDULED, Match.Status.LIVE],
     )[:20]
     return render(request, 'web/home.html', {'matches': matches, 'active': 'home'})
 
@@ -515,16 +529,12 @@ def logout_view(request):
     auth_logout(request)
     return redirect('web:home')
 
-
 def password_reset_request_view(request):
     if request.method == 'POST':
         email = request.POST.get('email', '').strip()
         try:
             user = User.objects.get(email=email)
-            PasswordResetToken.objects.filter(
-                user=user,
-                is_used=False,
-            ).update(is_used=True)
+            PasswordResetToken.objects.filter(user=user, is_used=False).update(is_used=True)
 
             import secrets
             token = secrets.token_urlsafe(40)
@@ -546,7 +556,6 @@ def password_reset_request_view(request):
 
     return render(request, 'web/reset_password.html')
 
-
 def password_reset_confirm_view(request):
     if request.method == 'POST':
         token = request.POST.get('token', '').strip()
@@ -561,10 +570,7 @@ def password_reset_confirm_view(request):
             error = 'Passwords do not match.'
         else:
             try:
-                reset_obj = PasswordResetToken.objects.get(
-                    token=token,
-                    is_used=False,
-                )
+                reset_obj = PasswordResetToken.objects.get(token=token, is_used=False)
             except PasswordResetToken.DoesNotExist:
                 reset_obj = None
                 error = 'Invalid or expired reset token.'
@@ -589,7 +595,6 @@ def password_reset_confirm_view(request):
 def matches_view(request):
     matches = Match.objects.select_related('sport', 'tournament').all()
     return render(request, 'web/matches.html', {'matches': matches, 'active': 'matches'})
-
 
 def match_detail_view(request, pk):
     match = get_object_or_404(Match.objects.select_related('sport', 'tournament'), pk=pk)
@@ -625,7 +630,6 @@ def match_detail_view(request, pk):
         },
     )
 
-
 @login_required
 def place_bet_view(request, pk):
     match = get_object_or_404(Match, pk=pk)
@@ -650,7 +654,6 @@ def place_bet_view(request, pk):
                 },
             )
     return redirect('web:match_detail', pk=match.pk)
-
 
 @login_required
 def parlay_bet_view(request):
@@ -706,7 +709,6 @@ def parlay_bet_view(request):
         },
     )
 
-
 @login_required
 def parlay_history_view(request):
     parlays = ParlayBet.objects.filter(user=request.user).prefetch_related('legs__match')
@@ -718,7 +720,6 @@ def parlay_history_view(request):
             'active': 'parlay_history',
         },
     )
-
 
 @login_required
 def wallet_view(request):
@@ -740,7 +741,6 @@ def wallet_view(request):
         },
     )
 
-
 @login_required
 @require_POST
 def wallet_deposit_view(request):
@@ -756,7 +756,6 @@ def wallet_deposit_view(request):
             'web/wallet.html',
             {'error': 'Invalid deposit amount.'},
         )
-
 
 @login_required
 @require_POST
@@ -779,7 +778,6 @@ def wallet_withdraw_view(request):
             {'error': str(exc)},
         )
 
-
 @login_required
 @require_POST
 def confirm_deposit_view(request, deposit_id):
@@ -800,7 +798,6 @@ def confirm_deposit_view(request, deposit_id):
             'web/wallet.html',
             {'error': str(exc)},
         )
-
 
 @login_required
 def bet_history_view(request):

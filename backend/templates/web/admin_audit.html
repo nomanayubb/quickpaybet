@@ -2,6 +2,19 @@
 
 {% block content %}
     <h1>Audit Logs</h1>
+
+    <form method="get" style="margin-bottom: 16px;">
+        <div class="form-group">
+            <label>User email contains</label>
+            <input type="text" name="user_email" value="{{ user_email|default:'' }}" placeholder="e.g. admin@">
+        </div>
+        <div class="form-group">
+            <label>Action contains</label>
+            <input type="text" name="action" value="{{ action_filter|default:'' }}" placeholder="e.g. settle">
+        </div>
+        <button type="submit" class="btn">Filter</button>
+    </form>
+
     <table>
         <thead>
             <tr>
@@ -40,11 +53,11 @@
     {% if page_obj.has_previous or page_obj.has_next %}
         <div style="margin-top: 20px;">
             {% if page_obj.has_previous %}
-                <a class="btn" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                <a class="btn" href="?page={{ page_obj.previous_page_number }}&user_email={{ user_email|urlencode }}&action={{ action_filter|urlencode }}">Previous</a>
             {% endif %}
             <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
             {% if page_obj.has_next %}
-                <a class="btn" href="?page={{ page_obj.next_page_number }}">Next</a>
+                <a class="btn" href="?page={{ page_obj.next_page_number }}&user_email={{ user_email|urlencode }}&action={{ action_filter|urlencode }}">Next</a>
             {% endif %}
         </div>
     {% endif %}

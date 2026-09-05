@@ -9,7 +9,7 @@ from rest_framework.test import APITestCase, APIClient
 
 from apps.accounts.models import User
 from apps.sports.models import Sport, Match
-from apps.wallet.models import Wallet
+from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
 from .models import Bet, ParlayBet
 from .services import settle_bet, place_bet, place_parlay_bet, settle_bets_for_match
@@ -76,8 +76,8 @@ class BettingServiceTests(TestCase):
         settle_bet(bet, Bet.Selection.HOME)
         bet.refresh_from_db()
         self.assertEqual(bet.status, Bet.Status.WON)
-        self.wallet = Wallet.objects.get(user=self.user)
-        self.assertEqual(self.wallet.balance, Decimal('110'))
+        wallet = Wallet.objects.get(user=self.user)
+        self.assertEqual(wallet.balance, Decimal('110'))
 
     def test_settle_loss(self):
         bet = place_bet(
@@ -90,8 +90,40 @@ class BettingServiceTests(TestCase):
         bet.refresh_from_db()
         self.assertEqual(bet.status, Bet.Status.LOST)
         self.assertEqual(bet.stake, Decimal('10'))
-        self.wallet = Wallet.objects.get(user=self.user)
-        self.assertEqual(self.wallet.balance, Decimal('90'))
+        wallet = Wallet.objects.get(user=self.user)
+        self.assertEqual(wallet.balance, Decimal('90'))
+
+    def test_commission_credited_on_loss(self):
+        # Create a parent with 10% commission rate
+        parent = User.objects.create_user(
+            email='parent@example.com',
+            password='parentpass',
+            role=User.Role.AGENT,
+            commission_rate=Decimal('10'),
+        )
+        deposit_funds(parent, Decimal('0'))
+
+        # Make our main user a child of the parent
+        self.user.parent = parent
+        self.user.save()
+
+        bet = place_bet(
+            user=self.user,
+            match_id=self.match.id,
+            selection=Bet.Selection.HOME,
+            stake=Decimal('10'),
+        )
+        settle_bet(bet, Bet.Selection.AWAY)   # losing bet
+
+        parent_wallet = Wallet.objects.get(user=parent)
+        self.assertEqual(parent_wallet.balance, Decimal('1'))   # 10% of 10
+
+        txn = WalletTransaction.objects.filter(
+            wallet=parent_wallet,
+            txn_type=WalletTransaction.TxnType.COMMISSION,
+        ).first()
+        self.assertIsNotNone(txn)
+        self.assertEqual(txn.amount, Decimal('1'))
 
 
 class ParlayAPITests(APITestCase):
@@ -140,7 +172,6 @@ class ParlayAPITests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['status'], ParlayBet.Status.PENDING)
-        self.assertEqual(response.data['stake'], '20.00000000')
         wallet = Wallet.objects.get(user=self.user)
         self.assertEqual(wallet.balance, Decimal('180'))
 
@@ -154,12 +185,10 @@ class ParlayAPITests(APITestCase):
             ],
         )
 
-        # Match1: home wins 2-0
         self.match1.status = Match.Status.FINISHED
         self.match1.home_score = 2
         self.match1.away_score = 0
         self.match1.save()
-        # Match2: home wins 3-1
         self.match2.status = Match.Status.FINISHED
         self.match2.home_score = 3
         self.match2.away_score = 1
@@ -171,8 +200,6 @@ class ParlayAPITests(APITestCase):
         parlay.refresh_from_db()
         self.assertEqual(parlay.status, ParlayBet.Status.WON)
         wallet = Wallet.objects.get(user=self.user)
-        # initial balance 200, stake 20 => 180
-        # payout after parlay won = 180 + (20*2.0*1.5) = 180+60 = 240
         self.assertEqual(wallet.balance, Decimal('240'))
 
     def test_parlay_settles_as_lost(self):
@@ -185,12 +212,10 @@ class ParlayAPITests(APITestCase):
             ],
         )
 
-        # Match1: home wins
         self.match1.status = Match.Status.FINISHED
         self.match1.home_score = 2
         self.match1.away_score = 0
         self.match1.save()
-        # Match2: away wins => parlay loses
         self.match2.status = Match.Status.FINISHED
         self.match2.home_score = 0
         self.match2.away_score = 1

@@ -1,6 +1,7 @@
-import urllib.request
 import json
 import os
+import urllib.request
+import urllib.parse
 
 
 class BaseOddsProvider:
@@ -51,25 +52,89 @@ class MockOddsProvider(BaseOddsProvider):
 
 class TheyOddsAPIProvider(BaseOddsProvider):
     """
-    Example skeleton for a real provider (e.g., The Odds API).
-    Requires ODDS_API_KEY / ODDS_API_URL environment variables.
+    Real implementation for The Odds API.
+    Requires ODDS_API_KEY and optionally ODDS_SPORT_KEY / ODDS_API_URL.
+    fetch_matches returns normalized matches with H2H + Draw odds.
     """
+
     def __init__(self):
         self.name = 'theoddsapi'
         self.api_key = os.getenv('ODDS_API_KEY', '')
-        self.api_url = os.getenv('ODDS_API_URL', 'https://api.the-odds-api.com/v4/sports')
+        self.base_url = os.getenv(
+            'ODDS_API_URL',
+            'https://api.the-odds-api.com/v4',
+        ).rstrip('/')
+        self.sport_key = os.getenv('ODDS_SPORT_KEY', 'soccer_epl')
+
+    def _raw_get(self, path: str) -> dict | list:
+        if not self.api_key:
+            raise RuntimeError('ODDS_API_KEY is not configured.')
+        url = f'{self.base_url}{path}'
+        if '?' in url:
+            url += f'&apiKey={urllib.parse.quote(self.api_key)}'
+        else:
+            url += f'?apiKey={urllib.parse.quote(self.api_key)}'
+
+        request = urllib.request.Request(url)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode('utf-8'))
 
     def fetch_matches(self) -> list[dict]:
-        # Real implementation would parse JSON and return normalized dicts.
-        # This placeholder raises a clear error until credentials are set.
-        if not self.api_key:
-            raise ValueError('ODDS_API_KEY is not set. Use MockOddsProvider for development.')
-        # You would use urllib here:
-        # url = f"{self.api_url}?apiKey={self.api_key}&regions=eu&markets=h2h"
-        # with urllib.request.urlopen(url) as response:
-        #     data = json.loads(response.read().decode())
-        # return normalized_matches(data)
-        raise NotImplementedError('Implement provider logic when ready.')
+        """Fetch scheduled matches / odds for a configured sport key."""
+
+        # Get odds from the real provider
+        path = f'/sports/{self.sport_key}/odds/?regions=eu&markets=h2h,draw'
+        raw_data = self._raw_get(path)
+
+        if not isinstance(raw_data, list):
+            return []
+
+        normalized = []
+        for event_data in raw_data:
+            home_team = event_data.get('home_team')
+            away_team = event_data.get('away_team')
+            start_time = event_data.get('commence_time')
+            if not home_team or not away_team or not start_time:
+                continue
+
+            odds_home = odds_draw = odds_away = None
+            # The Odds API returns multiple books/markets. We use the first H2H market.
+            for book in event_data.get('bookmakers', []):
+                for market in book.get('markets', []):
+                    if market.get('key') != 'h2h':
+                        continue
+                    # h2h outcomes: "Home", "Draw", "Away"
+                    for outcome in market.get('outcomes', []):
+                        price = str(outcome.get('price', ''))
+                        name = outcome.get('name', '')
+                        if 'home' in name.lower():
+                            odds_home = price
+                        elif 'draw' in name.lower():
+                            odds_draw = price
+                        elif 'away' in name.lower():
+                            odds_away = price
+                    # Use first H2H book only
+                    break
+                if odds_home or odds_draw or odds_away:
+                    break
+
+            if not (odds_home and odds_draw and odds_away):
+                continue
+
+            normalized.append({
+                'sport_slug': 'football',          # The Odds API key is not a slug
+                'sport_name': event_data.get('sport_title', 'Football'),
+                'tournament_name': event_data.get('sport_title', ''),
+                'season': '',
+                'home_team': home_team,
+                'away_team': away_team,
+                'start_time': start_time,
+                'odds_home': odds_home,
+                'odds_draw': odds_draw,
+                'odds_away': odds_away,
+            })
+
+        return normalized
 
 
 def get_odds_provider() -> BaseOddsProvider:

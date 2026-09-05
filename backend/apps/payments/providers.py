@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 from decimal import Decimal
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -20,7 +21,7 @@ class BasePaymentProvider:
         """
         raise NotImplementedError
 
-    def verify_webhook(self, data: dict, headers: dict | None = None) -> bool:
+    def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
         raise NotImplementedError
 
     def is_success_payment_status(self, status: str) -> bool:
@@ -40,19 +41,22 @@ class MockPaymentProvider(BasePaymentProvider):
             'provider': self.name,
         }
 
-    def verify_webhook(self, data: dict, headers: dict | None = None) -> bool:
+    def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
         return True
 
 
 class NOWPaymentsProvider(BasePaymentProvider):
     """
-    NOWPayments integration.
+    Real NOWPayments integration (production-ready skeleton).
 
-    Uses HMAC-SHA512 signature validation for incoming IPN webhooks.
-    The secret is read from the NOWPAYMENTS_IPN_SECRET environment variable.
+    Requires PAYMENT_PROVIDER=nowpayments and:
+      NOWPAYMENTS_API_KEY
+      NOWPAYMENTS_IPN_SECRET
+      NOWPAYMENTS_API_URL (default: https://api.nowpayments.io/v1)
     """
+
     name = 'nowpayments'
-    base_url = os.getenv('NOWPAYMENTS_API_URL', 'https://api.nowpayments.io/v1')
+    base_url = os.getenv('NOWPAYMENTS_API_URL', 'https://api.nowpayments.io/v1').rstrip('/')
     api_key = os.getenv('NOWPAYMENTS_API_KEY', '')
     ipn_secret = os.getenv('NOWPAYMENTS_IPN_SECRET', '')
 
@@ -75,60 +79,72 @@ class NOWPaymentsProvider(BasePaymentProvider):
             headers=self._headers(),
             method='POST',
         )
-        with urlopen(request) as response:
-            return json.loads(response.read().decode('utf-8'))
+        try:
+            with urlopen(request, timeout=30) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            body = exc.read().decode('utf-8')
+            raise RuntimeError(
+                f'NOWPayments HTTP {exc.code}: {body}'
+            )
 
     def create_deposit(self, user, amount: Decimal, currency: str = 'USDT', external_id: str = '') -> dict:
         if not external_id:
             external_id = f"dep_{uuid.uuid4().hex}"
 
+        # NOWPayments expects `pay_currency` like 'usdttrc20' but can also accept 'usdt'
+        normalized_currency = currency.upper()
         payload = {
             'price_amount': str(amount),
             'price_currency': 'usd',
-            'pay_currency': currency.lower(),
+            'pay_currency': normalized_currency,
             'order_id': external_id,
-            'ipn_callback_url': 'http://YOUR_DOMAIN/api/payments/webhook/',
+            'ipn_callback_url': os.getenv(
+                'NOWPAYMENTS_IPN_CALLBACK_URL',
+                'http://YOUR_DOMAIN/api/payments/webhook/',
+            ),
         }
 
         result = self._post('/payment', payload)
 
+        if not result.get('payment_id'):
+            raise RuntimeError(
+                'NOWPayments create-payment response missing payment_id: '
+                + json.dumps(result)
+            )
+
         return {
-            'external_id': str(result.get('payment_id', external_id)),
+            'external_id': str(result['payment_id']),
             'address': result.get('pay_address', ''),
             'provider': self.name,
             'payload': result,
         }
 
-    def verify_webhook(self, data: dict, headers: dict | None = None) -> bool:
+    def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
         """
-        Validates the NOWPayments IPN signature.
-
-        The signature is sent in the 'x-nowpayments-sig' header and is an
-        HMAC-SHA512 hex digest of the raw request body using the IPN secret.
-        This method receives the *original* body as a str/bytes through the
-        `data` argument because the dict passed here has already been parsed.
-        In real usage, the view should call this method before JSON decoding.
-        For simplicity, we accept a `headers` dict containing the header value
-        and compute the signature against a JSON-encoded copy. To be fully
-        compatible you must pass the *raw* bytes and the signature header.
-
-        To avoid false failures, a dummy implementation is provided here that
-        verifies without a real secret. When you add the real NOWPAYMENTS_IPN_SECRET,
-        this placeholder is replaced by the actual HMAC test.
+        Validates the signature as an HMAC‐SHA512 of the raw body.
+        The signature header MUST be 'x-nowpayments-sig'.
+        If no IPN secret is configured, we accept the webhook for development.
         """
         if not self.ipn_secret:
             return True
-        signature = (headers or {}).get('x-nowpayments-sig', '')
+
+        header_name = 'x-nowpayments-sig'
+        signature = (headers or {}).get(header_name, '')
+
         if not signature:
             return False
-        # The IPN raw payload is expected to be JSON – if not, signature check will fail.
-        raw_body = json.dumps(data).encode('utf-8')
-        computed = hmac.new(
+
+        if isinstance(raw_body, str):
+            raw_body = raw_body.encode('utf-8')
+
+        expected = hmac.new(
             self.ipn_secret.encode('utf-8'),
             raw_body,
-            hashlib.sha512
+            hashlib.sha512,
         ).hexdigest()
-        return hmac.compare_digest(computed, signature.lower())
+
+        return hmac.compare_digest(expected, signature.lower())
 
 
 def get_payment_provider() -> BasePaymentProvider:

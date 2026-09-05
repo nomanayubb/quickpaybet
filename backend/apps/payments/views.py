@@ -13,28 +13,34 @@ class PaymentWebhookView(APIView):
     def post(self, request):
         provider = get_payment_provider()
 
-        # Verify the signature before processing if the provider supports it.
-        try:
-            valid = provider.verify_webhook(
-                request.data,
-                headers=request.headers,
-            )
-        except Exception:
-            valid = False
+        # Pass raw body to the provider so it can verify the HMAC signature.
+        raw_body = request.body
+        headers = request.headers
 
+        valid = provider.verify_webhook(raw_body, headers=headers)
         if not valid:
             return Response(
                 {'error': 'Invalid webhook signature.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        external_id = request.data.get('external_id')
-        provider_status = request.data.get('status', '').upper()
+        # Parse JSON only AFTER signature validation.
+        import json
+        try:
+            data = json.loads(raw_body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return Response(
+                {'error': 'Invalid JSON body.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        external_id = data.get('external_id')
+        provider_status = data.get('status', '').upper()
 
         if not external_id:
             return Response(
                 {'error': 'external_id is required.'},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if provider.is_success_payment_status(provider_status):
@@ -43,13 +49,13 @@ class PaymentWebhookView(APIView):
             except Exception as exc:  # noqa: BLE001 – catch and return validation error
                 return Response(
                     {'error': str(exc)},
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
         elif provider_status in ('FAILED', 'CANCELLED'):
             from .models import CryptoPayment
             CryptoPayment.objects.filter(
                 external_id=external_id,
-                status=CryptoPayment.Status.PENDING
+                status=CryptoPayment.Status.PENDING,
             ).update(status=CryptoPayment.Status.FAILED)
 
         return Response({'status': 'ok'})
