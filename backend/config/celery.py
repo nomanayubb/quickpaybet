@@ -21,4 +21,8 @@ app.conf.beat_schedule = {
         'task': 'apps.sports.tasks.sync_odds_celery',
         'schedule': crontab(hour='*/6', minute=0),
     },
+    'sync-results-recurring': {
+        'task': 'apps.sports.tasks.sync_results_celery',
+        'schedule': crontab(minute='*/30'),
+    },
 }

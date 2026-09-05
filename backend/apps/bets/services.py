@@ -76,10 +76,10 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
 
 
 def _credit_affiliate_commission(bet: Bet):
-    """Credit the direct parent a percentage of the losing stake.
+    """
+    Credit the direct parent a percentage of a losing single-bet stake.
 
-    Only called when a single bet is settled as LOST. If the parent is
-    missing or has no commission rate, nothing happens.
+    Only called when a single bet is settled as LOST.
     """
     user = bet.user
     parent = user.parent
@@ -109,6 +109,42 @@ def _credit_affiliate_commission(bet: Bet):
         status=WalletTransaction.Status.COMPLETED,
         balance_after=parent_wallet.balance,
         description=f'Commission on losing bet #{bet.id} from {user.email}',
+    )
+
+
+def _credit_affiliate_commission_on_parlay(parlay: ParlayBet):
+    """
+    Credit the direct parent a percentage of the parlay stake when a
+    parlay bet settles as LOST.
+    """
+    user = parlay.user
+    parent = user.parent
+    if parent is None:
+        return
+
+    rate = parent.commission_rate
+    if rate is None or rate <= 0:
+        return
+
+    commission = (parlay.stake * rate) / Decimal('100')
+    if commission <= 0:
+        return
+
+    try:
+        parent_wallet = Wallet.objects.select_for_update().get(user=parent)
+    except Wallet.DoesNotExist:
+        return
+
+    parent_wallet.balance += commission
+    parent_wallet.save(update_fields=['balance', 'updated_at'])
+
+    WalletTransaction.objects.create(
+        wallet=parent_wallet,
+        txn_type=WalletTransaction.TxnType.COMMISSION,
+        amount=commission,
+        status=WalletTransaction.Status.COMPLETED,
+        balance_after=parent_wallet.balance,
+        description=f'Commission on losing parlay #{parlay.id} from {user.email}',
     )
 
 
@@ -210,6 +246,7 @@ def _settle_parlay_if_ready(parlay_id: int):
         if has_lost:
             parlay.status = ParlayBet.Status.LOST
             parlay.save(update_fields=['status', 'updated_at'])
+            _credit_affiliate_commission_on_parlay(parlay)
             return
 
         has_refunded = any(leg.outcome == ParlayLeg.Outcome.REFUNDED for leg in legs)
@@ -338,7 +375,6 @@ def settle_bets_for_match(match: Match):
     if match.status not in (Match.Status.FINISHED, Match.Status.CANCELLED):
         return
 
-    # Refund pending single bets when the match is cancelled
     if match.status == Match.Status.CANCELLED:
         pending_bets = Bet.objects.select_for_update().filter(
             match=match,
@@ -348,7 +384,6 @@ def settle_bets_for_match(match: Match):
             with transaction.atomic():
                 refund_bet(bet)
 
-    # Settle single bets when the match has a final score
     if match.status == Match.Status.FINISHED and match.home_score is not None and match.away_score is not None:
         if match.home_score > match.away_score:
             match_result = Bet.Selection.HOME
@@ -366,5 +401,4 @@ def settle_bets_for_match(match: Match):
             with transaction.atomic():
                 settle_bet(bet, match_result)
 
-    # Settle parlay legs
     settle_parlays_for_match(match)

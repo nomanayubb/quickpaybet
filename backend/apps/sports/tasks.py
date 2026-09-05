@@ -15,3 +15,16 @@ def sync_odds_celery():
     logger.info('Calling sync_odds management command.')
     call_command('sync_odds')
     return True
+
+
+@shared_task
+def sync_results_celery():
+    """
+    Placeholder Celery task that periodically runs `sync_results`.
+
+    In production, the actual result source (API/keyboard entry) would provide
+    match IDs and scores. This task keeps the command accessible to Celery Beat
+    but does not fetch arbitrary remote results automatically.
+    """
+    logger.info('Scheduled sync_results task called.')
+    return True

@@ -59,4 +59,46 @@
             {% endfor %}
         </tbody>
     </table>
+
+    <h3>Per-Sport Report</h3>
+    <table>
+        <thead>
+            <tr><th>Sport</th><th>Bets</th><th>Turnover</th><th>Payout</th><th>Profit</th></tr>
+        </thead>
+        <tbody>
+            {% for s in sport_report %}
+                <tr><td>{{ s.name }}</td><td>{{ s.bets_count }}</td><td>{{ s.turnover }}</td><td>{{ s.payout }}</td><td>{{ s.profit }}</td></tr>
+            {% empty %}
+                <tr><td colspan="5">No sport data yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h3>Top Users by Bet Volume</h3>
+    <table>
+        <thead>
+            <tr><th>Email</th><th>Bets</th><th>Turnover</th><th>Payout</th><th>Profit</th></tr>
+        </thead>
+        <tbody>
+            {% for u in user_report %}
+                <tr><td>{{ u.email }}</td><td>{{ u.bets_count }}</td><td>{{ u.turnover }}</td><td>{{ u.payout }}</td><td>{{ u.profit }}</td></tr>
+            {% empty %}
+                <tr><td colspan="5">No user data yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h3>Top Matches</h3>
+    <table>
+        <thead>
+            <tr><th>Match</th><th>Bets</th><th>Turnover</th><th>Payout</th><th>Profit</th></tr>
+        </thead>
+        <tbody>
+            {% for m in match_report %}
+                <tr><td>{{ m.label }}</td><td>{{ m.bets_count }}</td><td>{{ m.turnover }}</td><td>{{ m.payout }}</td><td>{{ m.profit }}</td></tr>
+            {% empty %}
+                <tr><td colspan="5">No match data yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
 {% endblock %}

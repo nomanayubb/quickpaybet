@@ -6,6 +6,7 @@ from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import authenticate
 from django.core.cache import cache
+from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
@@ -26,7 +27,7 @@ from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
 from apps.payments.models import CryptoPayment
 from apps.payments.services import create_deposit, handle_deposit_success
-from apps.reports.services import get_overview_report, get_daily_report
+from apps.reports.services import get_overview_report, get_daily_report, get_sport_report, get_user_report, get_match_report
 
 
 def _has_dashboard_access(user):
@@ -61,6 +62,9 @@ def admin_reports_view(request):
     today = timezone.localdate()
     start_date = today - timedelta(days=6)
     daily = get_daily_report(start_date, today)
+    sport_report = get_sport_report()
+    user_report = get_user_report()
+    match_report = get_match_report()
 
     return render(
         request,
@@ -68,6 +72,9 @@ def admin_reports_view(request):
         {
             'report': report,
             'daily': daily,
+            'sport_report': sport_report,
+            'user_report': user_report,
+            'match_report': match_report,
             'active': 'reports',
         },
     )
@@ -318,7 +325,7 @@ def admin_cancel_match_view(request, match_id):
 
     match.status = Match.Status.CANCELLED
     match.save()
-    # This refunds single bets and marks parlay legs as refunded
+    # This refunds pending single bets and marks parlay legs as refunded
     settle_bets_for_match(match)
 
     return redirect('web:admin_matches')
@@ -540,18 +547,29 @@ def password_reset_request_view(request):
             token = secrets.token_urlsafe(40)
             PasswordResetToken.objects.create(user=user, token=token)
 
-            return render(
-                request,
-                'web/reset_password_done.html',
-                {'token': token},
+            # Send email (in development with EMAIL_BACKEND=console it will print)
+            send_mail(
+                subject='QuickPayBet Password Reset',
+                message=(
+                    f'Hello {user.email},\n\n'
+                    f'You requested a password reset.\n'
+                    f'Your reset token is:\n\n{token}\n\n'
+                    'Use it with the Password Reset Confirm page.'
+                ),
+                from_email=None,
+                recipient_list=[user.email],
+                fail_silently=False,
             )
+
+            # Show token only in DEBUG so local developers can still test the flow
+            show_token = settings.DEBUG
         except User.DoesNotExist:
-            pass
+            show_token = False
 
         return render(
             request,
             'web/reset_password_done.html',
-            {},
+            {'token': token if show_token else None},
         )
 
     return render(request, 'web/reset_password.html')
