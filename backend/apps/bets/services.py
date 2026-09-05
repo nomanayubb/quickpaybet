@@ -24,6 +24,18 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
     if stake <= 0:
         raise ValidationError('Stake must be positive.')
 
+    if not user.is_betting_enabled:
+        raise ValidationError('Betting is disabled for your account.')
+
+    if user.min_bet_amount is not None and stake < user.min_bet_amount:
+        raise ValidationError(
+            f'Minimum stake allowed is {user.min_bet_amount}.'
+        )
+    if user.max_bet_amount is not None and stake > user.max_bet_amount:
+        raise ValidationError(
+            f'Maximum stake allowed is {user.max_bet_amount}.'
+        )
+
     try:
         match = Match.objects.get(pk=match_id)
     except Match.DoesNotExist:

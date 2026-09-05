@@ -10,9 +10,10 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'role', 'first_name', 'last_name', 'date_joined'
+            'id', 'email', 'role', 'parent', 'first_name', 'last_name',
+            'min_bet_amount', 'max_bet_amount', 'is_betting_enabled', 'date_joined'
         )
-        read_only_fields = ('id', 'date_joined', 'role')
+        read_only_fields = ('id', 'date_joined', 'role', 'parent')
 
 
 class RegisterSerializer(serializers.ModelSerializer):
