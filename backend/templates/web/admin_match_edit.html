@@ -1,0 +1,49 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Edit Match – {{ match.home_team }} v {{ match.away_team }}</h1>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label>Home team</label>
+            <input type="text" name="home_team" value="{{ match.home_team }}" required>
+        </div>
+        <div class="form-group">
+            <label>Away team</label>
+            <input type="text" name="away_team" value="{{ match.away_team }}" required>
+        </div>
+        <div class="form-group">
+            <label>Status</label>
+            <select name="status">
+                <option value="scheduled" {% if match.status == 'scheduled' %}selected{% endif %}>Scheduled</option>
+                <option value="live" {% if match.status == 'live' %}selected{% endif %}>Live</option>
+                <option value="finished" {% if match.status == 'finished' %}selected{% endif %}>Finished</option>
+                <option value="cancelled" {% if match.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Start time (YYYY-MM-DDTHH:MM)</label>
+            <input type="datetime-local" name="start_time" value="{{ match.start_time|date:'Y-m-d\TH:i' }}" required>
+        </div>
+        <div class="form-group">
+            <label>Odds – Home</label>
+            <input type="number" name="odds_home" step="0.01" min="1.01" value="{{ match.odds_home|default_if_none:'' }}">
+        </div>
+        <div class="form-group">
+            <label>Odds – Draw</label>
+            <input type="number" name="odds_draw" step="0.01" min="1.01" value="{{ match.odds_draw|default_if_none:'' }}">
+        </div>
+        <div class="form-group">
+            <label>Odds – Away</label>
+            <input type="number" name="odds_away" step="0.01" min="1.01" value="{{ match.odds_away|default_if_none:'' }}">
+        </div>
+        <button type="submit" class="btn">Save match</button>
+    </form>
+
+    <p><a href="{% url 'web:admin_matches' %}">← Back to match list</a></p>
+{% endblock %}

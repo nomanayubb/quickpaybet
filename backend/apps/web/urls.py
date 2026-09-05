@@ -4,6 +4,7 @@ from django.contrib.auth import views as auth_views
 from .views import (
     admin_dashboard_view,
     admin_matches_view,
+    admin_edit_match_view,
     admin_settle_match_view,
     admin_cancel_match_view,
     admin_users_view,
@@ -32,6 +33,7 @@ urlpatterns = [
     path('matches/<int:pk>/', match_detail_view, name='match_detail'),
     path('dashboard/', admin_dashboard_view, name='dashboard'),
     path('admin/matches/', admin_matches_view, name='admin_matches'),
+    path('admin/matches/<int:match_id>/edit/', admin_edit_match_view, name='admin_edit_match'),
     path('admin/matches/<int:match_id>/settle/', admin_settle_match_view, name='admin_settle_match'),
     path('admin/matches/<int:match_id>/cancel/', admin_cancel_match_view, name='admin_cancel_match'),
     path('admin/users/', admin_users_view, name='admin_users'),

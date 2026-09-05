@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
+from django.utils.dateparse import parse_datetime
 
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
@@ -52,6 +53,67 @@ def admin_matches_view(request):
         'web/admin_matches.html',
         {
             'matches': matches,
+            'active': 'admin_matches',
+        },
+    )
+
+
+def admin_edit_match_view(request, match_id):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    match = get_object_or_404(Match.objects.select_related('sport', 'tournament'), pk=match_id)
+    error = None
+
+    if request.method == 'POST':
+        try:
+            home_team = request.POST.get('home_team', '').strip()
+            away_team = request.POST.get('away_team', '').strip()
+            status = request.POST.get('status', '').strip()
+            start_time_raw = request.POST.get('start_time', '').strip()
+            odds_home_raw = request.POST.get('odds_home', '').strip()
+            odds_draw_raw = request.POST.get('odds_draw', '').strip()
+            odds_away_raw = request.POST.get('odds_away', '').strip()
+
+            if not home_team or not away_team:
+                raise ValidationError('Team names are required.')
+            if status not in Match.Status.values:
+                raise ValidationError('Invalid match status.')
+
+            start_time = parse_datetime(start_time_raw)
+            if start_time is None:
+                raise ValidationError('Invalid start time. Use YYYY-MM-DDTHH:MM format.')
+
+            def parse_decimal(value):
+                if value == '' or value is None:
+                    return None
+                try:
+                    d = Decimal(value)
+                except InvalidOperation:
+                    raise ValidationError('Odds must be a valid decimal number.')
+                if d <= 0:
+                    raise ValidationError('Odds must be positive.')
+                return d
+
+            match.home_team = home_team
+            match.away_team = away_team
+            match.status = status
+            match.start_time = start_time
+            match.odds_home = parse_decimal(odds_home_raw)
+            match.odds_draw = parse_decimal(odds_draw_raw)
+            match.odds_away = parse_decimal(odds_away_raw)
+
+            match.save()
+            return redirect('web:admin_matches')
+        except (ValidationError, InvalidOperation, ValueError) as exc:
+            error = str(exc)
+
+    return render(
+        request,
+        'web/admin_match_edit.html',
+        {
+            'match': match,
+            'error': error,
             'active': 'admin_matches',
         },
     )
