@@ -12,7 +12,7 @@
                 <th>Start</th>
                 <th>Status</th>
                 <th>Current Score</th>
-                <th>Settle / Cancel</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -30,6 +30,7 @@
                         {% endif %}
                     </td>
                     <td>
+                        <a class="btn" href="{% url 'web:admin_edit_match' match.id %}">Edit</a>
                         {% if match.status != 'finished' and match.status != 'cancelled' %}
                             <form method="post" action="{% url 'web:admin_settle_match' match.id %}" style="display:inline">
                                 {% csrf_token %}
