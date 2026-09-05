@@ -51,3 +51,22 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class PasswordResetToken(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='password_reset_tokens'
+    )
+    token = models.CharField(max_length=100, unique=True)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Password Reset Token'
+        verbose_name_plural = 'Password Reset Tokens'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user.email} – {self.token[:8]}...'

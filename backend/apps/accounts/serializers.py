@@ -1,7 +1,11 @@
+import secrets
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from .models import PasswordResetToken
 
 User = get_user_model()
 
@@ -48,3 +52,65 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
             'min_bet_amount', 'max_bet_amount', 'is_betting_enabled'
         )
         read_only_fields = ('id', 'email')
+
+
+class RequestPasswordResetSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def save(self):
+        email = self.validated_data['email']
+        try:
+            user = User.objects.get(email=email)
+            # Invalidate any prior outstanding reset tokens for this user.
+            PasswordResetToken.objects.filter(
+                user=user,
+                is_used=False,
+            ).update(is_used=True)
+
+            # Create a fresh token.
+            token = secrets.token_urlsafe(40)
+            PasswordResetToken.objects.create(
+                user=user,
+                token=token,
+            )
+            # In a real implementation you would send the token by email.
+            # For development, the token is returned only in DEBUG mode.
+        except User.DoesNotExist:
+            pass
+        return {'email': email}
+
+
+class ConfirmPasswordResetSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    new_password = serializers.CharField(
+        write_only=True,
+        validators=[validate_password]
+    )
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError(
+                {'new_password': 'Passwords must match.'}
+            )
+
+        try:
+            reset_obj = PasswordResetToken.objects.get(
+                token=attrs['token'],
+                is_used=False,
+            )
+        except PasswordResetToken.DoesNotExist:
+            raise serializers.ValidationError(
+                {'token': 'Invalid or expired reset token.'}
+            )
+
+        attrs['reset_obj'] = reset_obj
+        return attrs
+
+    def save(self):
+        reset_obj = self.validated_data['reset_obj']
+        user = reset_obj.user
+        user.set_password(self.validated_data['new_password'])
+        user.save()
+        reset_obj.is_used = True
+        reset_obj.save()

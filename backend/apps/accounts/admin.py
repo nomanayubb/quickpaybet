@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import User
+from .models import User, PasswordResetToken
 
 
 @admin.register(User)
@@ -29,3 +29,11 @@ class CustomUserAdmin(UserAdmin):
             'fields': ('parent', 'role', 'min_bet_amount', 'max_bet_amount', 'is_betting_enabled')
         }),
     )
+
+
+@admin.register(PasswordResetToken)
+class PasswordResetTokenAdmin(admin.ModelAdmin):
+    list_display = ('user', 'token', 'is_used', 'created_at')
+    list_filter = ('is_used', 'created_at')
+    search_fields = ('user__email', 'token')
+    readonly_fields = ('user', 'token', 'is_used', 'created_at')
