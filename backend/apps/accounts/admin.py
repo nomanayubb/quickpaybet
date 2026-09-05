@@ -6,14 +6,21 @@ from .models import User, PasswordResetToken
 
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
-    list_display = ('email', 'role', 'parent', 'is_staff', 'is_active')
+    list_display = ('email', 'role', 'parent', 'commission_rate', 'is_staff', 'is_active')
     list_filter = ('role', 'is_staff', 'is_active')
     ordering = ('email',)
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal info', {'fields': ('first_name', 'last_name')}),
         ('Hierarchy & Limits', {
-            'fields': ('parent', 'role', 'min_bet_amount', 'max_bet_amount', 'is_betting_enabled')
+            'fields': (
+                'parent',
+                'role',
+                'commission_rate',
+                'min_bet_amount',
+                'max_bet_amount',
+                'is_betting_enabled',
+            )
         }),
         ('Permissions', {
             'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')
@@ -26,7 +33,14 @@ class CustomUserAdmin(UserAdmin):
             'fields': ('email', 'password1', 'password2'),
         }),
         ('Hierarchy & Limits', {
-            'fields': ('parent', 'role', 'min_bet_amount', 'max_bet_amount', 'is_betting_enabled')
+            'fields': (
+                'parent',
+                'role',
+                'commission_rate',
+                'min_bet_amount',
+                'max_bet_amount',
+                'is_betting_enabled',
+            )
         }),
     )
 

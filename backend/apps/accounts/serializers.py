@@ -15,10 +15,13 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'role', 'parent', 'first_name', 'last_name',
+            'id', 'email', 'role', 'parent', 'commission_rate',
+            'first_name', 'last_name',
             'min_bet_amount', 'max_bet_amount', 'is_betting_enabled', 'date_joined'
         )
-        read_only_fields = ('id', 'date_joined', 'role', 'parent')
+        read_only_fields = (
+            'id', 'date_joined', 'role', 'parent', 'commission_rate'
+        )
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -49,7 +52,8 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'role', 'parent', 'first_name', 'last_name',
+            'id', 'email', 'role', 'parent', 'commission_rate',
+            'first_name', 'last_name',
             'min_bet_amount', 'max_bet_amount', 'is_betting_enabled'
         )
         read_only_fields = ('id', 'email')

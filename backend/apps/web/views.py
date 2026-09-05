@@ -357,6 +357,7 @@ def admin_user_update_view(request, user_id):
             parent_raw = request.POST.get('parent_id', '').strip()
             min_bet_raw = request.POST.get('min_bet_amount', '').strip()
             max_bet_raw = request.POST.get('max_bet_amount', '').strip()
+            commission_raw = request.POST.get('commission_rate', '').strip()
             is_betting_enabled = request.POST.get('is_betting_enabled') == 'on'
 
             user.role = new_role
@@ -369,8 +370,20 @@ def admin_user_update_view(request, user_id):
             else:
                 user.parent = None
 
+            # Parse optional bet limits
             user.min_bet_amount = Decimal(min_bet_raw) if min_bet_raw else None
             user.max_bet_amount = Decimal(max_bet_raw) if max_bet_raw else None
+
+            # Parse optional commission rate. Empty means zero.
+            try:
+                new_commission = Decimal(commission_raw) if commission_raw else Decimal('0')
+            except InvalidOperation:
+                raise ValidationError('Commission rate must be a valid decimal number.')
+            if new_commission < 0:
+                raise ValidationError('Commission rate cannot be negative.')
+            if new_commission > 100:
+                raise ValidationError('Commission rate cannot exceed 100%.')
+            user.commission_rate = new_commission
 
             if user.min_bet_amount is not None and user.min_bet_amount < 0:
                 raise ValidationError('Minimum bet cannot be negative.')
@@ -382,6 +395,7 @@ def admin_user_update_view(request, user_id):
 
             return redirect('web:admin_users')
         except (ValidationError, InvalidOperation, ValueError) as exc:
+            # Re-render edit page with the error
             return render(
                 request,
                 'web/admin_user_edit.html',

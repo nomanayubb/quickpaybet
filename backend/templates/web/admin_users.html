@@ -8,6 +8,7 @@
                 <th>Email</th>
                 <th>Role</th>
                 <th>Parent</th>
+                <th>Commission</th>
                 <th>Min Bet</th>
                 <th>Max Bet</th>
                 <th>Betting Enabled</th>
@@ -20,13 +21,14 @@
                     <td>{{ u.email }}</td>
                     <td>{{ u.role }}</td>
                     <td>{% if u.parent %}{{ u.parent.email }}{% else %}-{% endif %}</td>
+                    <td>{{ u.commission_rate|default:"0" }}%</td>
                     <td>{{ u.min_bet_amount|default:"-" }}</td>
                     <td>{{ u.max_bet_amount|default:"-" }}</td>
                     <td>{{ u.is_betting_enabled|yesno:"Yes,No" }}</td>
                     <td><a class="btn" href="{% url 'web:admin_user_edit' u.id %}">Edit</a></td>
                 </tr>
             {% empty %}
-                <tr><td colspan="7">No users yet.</td></tr>
+                <tr><td colspan="8">No users yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>

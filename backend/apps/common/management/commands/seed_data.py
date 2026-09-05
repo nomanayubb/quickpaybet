@@ -28,6 +28,7 @@ class Command(BaseCommand):
                 'is_staff': True,
                 'is_superuser': True,
                 'role': User.Role.ADMIN,
+                'commission_rate': 0,
             },
         )
         if admin_created:
@@ -40,6 +41,7 @@ class Command(BaseCommand):
             defaults={
                 'role': User.Role.MASTER,
                 'parent': admin,
+                'commission_rate': 10,
                 'min_bet_amount': '10',
                 'max_bet_amount': '5000',
             },
@@ -54,6 +56,7 @@ class Command(BaseCommand):
             defaults={
                 'role': User.Role.AGENT,
                 'parent': master,
+                'commission_rate': 5,
                 'min_bet_amount': '1',
                 'max_bet_amount': '1000',
             },
@@ -68,6 +71,7 @@ class Command(BaseCommand):
             defaults={
                 'role': User.Role.USER,
                 'parent': agent,
+                'commission_rate': 0,
                 'min_bet_amount': '0.01',
                 'max_bet_amount': '100',
             },
