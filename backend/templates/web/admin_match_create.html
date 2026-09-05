@@ -11,7 +11,7 @@
         {% csrf_token %}
         <div class="form-group">
             <label>Sport</label>
-            <select name="sport_id" required>
+            <select name="sport_id" id="sport-select" required>
                 <option value="">— Pick a sport —</option>
                 {% for sport in sports %}
                     <option value="{{ sport.id }}">{{ sport.name }}</option>
@@ -20,10 +20,10 @@
         </div>
         <div class="form-group">
             <label>Tournament (optional)</label>
-            <select name="tournament_id">
+            <select name="tournament_id" id="tournament-select">
                 <option value="">— None —</option>
                 {% for tournament in tournaments %}
-                    <option value="{{ tournament.id }}">{{ tournament.sport.name }} – {{ tournament.name }}</option>
+                    <option value="{{ tournament.id }}" data-sport="{{ tournament.sport_id }}">{{ tournament.sport.name }} – {{ tournament.name }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -55,4 +55,36 @@
     </form>
 
     <p><a href="{% url 'web:admin_matches' %}">← Back to match list</a></p>
+
+    <script>
+        (function() {
+            const sportSelect = document.getElementById('sport-select');
+            const tournamentSelect = document.getElementById('tournament-select');
+            const tournamentOptions = Array.from(tournamentSelect.querySelectorAll('option[data-sport]'));
+
+            function filterTournaments() {
+                const sportId = sportSelect.value;
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = '— None —';
+                tournamentSelect.innerHTML = '';
+                tournamentSelect.appendChild(placeholder);
+
+                if (!sportId) {
+                    return;
+                }
+
+                tournamentOptions
+                    .filter(function(opt) {
+                        return opt.dataset.sport === sportId;
+                    })
+                    .forEach(function(opt) {
+                        tournamentSelect.appendChild(opt);
+                    });
+            }
+
+            sportSelect.addEventListener('change', filterTournaments);
+            filterTournaments();
+        })();
+    </script>
 {% endblock %}

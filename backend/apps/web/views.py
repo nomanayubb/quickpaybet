@@ -2,6 +2,7 @@ from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import authenticate
 from django.core.cache import cache
+from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
@@ -201,12 +202,17 @@ def admin_matches_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
-    matches = Match.objects.select_related('sport', 'tournament').order_by('start_time')
+    matches_list = Match.objects.select_related('sport', 'tournament').order_by('start_time')
+    paginator = Paginator(matches_list, 20)
+    page_number = request.GET.get('page')
+    matches = paginator.get_page(page_number)
+
     return render(
         request,
         'web/admin_matches.html',
         {
             'matches': matches,
+            'page_obj': matches,
             'active': 'admin_matches',
         },
     )
@@ -318,12 +324,17 @@ def admin_audit_logs_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
-    logs = AuditLog.objects.select_related('user').order_by('-created_at')[:200]
+    logs_list = AuditLog.objects.select_related('user').order_by('-created_at')
+    paginator = Paginator(logs_list, 20)
+    page_number = request.GET.get('page')
+    logs = paginator.get_page(page_number)
+
     return render(
         request,
         'web/admin_audit.html',
         {
             'logs': logs,
+            'page_obj': logs,
             'active': 'audit',
         },
     )
@@ -333,11 +344,19 @@ def admin_users_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
-    users = User.objects.select_related('parent').order_by('email')
+    users_list = User.objects.select_related('parent').order_by('email')
+    paginator = Paginator(users_list, 20)
+    page_number = request.GET.get('page')
+    users = paginator.get_page(page_number)
+
     return render(
         request,
         'web/admin_users.html',
-        {'users': users, 'active': 'admin_users'},
+        {
+            'users': users,
+            'page_obj': users,
+            'active': 'admin_users',
+        },
     )
 
 
@@ -395,7 +414,6 @@ def admin_user_update_view(request, user_id):
 
             return redirect('web:admin_users')
         except (ValidationError, InvalidOperation, ValueError) as exc:
-            # Re-render edit page with the error
             return render(
                 request,
                 'web/admin_user_edit.html',
@@ -492,6 +510,7 @@ def login_view(request):
     return render(request, 'web/login.html')
 
 
+@require_POST
 def logout_view(request):
     auth_logout(request)
     return redirect('web:home')

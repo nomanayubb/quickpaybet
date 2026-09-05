@@ -54,6 +54,18 @@
             font-size: 14px;
         }
         .inline-form { display: inline-block; margin-left: 6px; }
+        .logout-form {
+            display: inline-block;
+            margin-left: 6px;
+        }
+        .logout-form button {
+            background: none;
+            border: none;
+            color: white;
+            text-decoration: underline;
+            cursor: pointer;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
@@ -75,7 +87,10 @@
                 <a href="{% url 'web:parlay_history' %}" class="{% if active == 'parlay_history' %}active{% endif %}">My Parlays</a>
                 <a href="{% url 'web:wallet' %}" class="{% if active == 'wallet' %}active{% endif %}">Wallet</a>
                 <a href="{% url 'web:bets' %}" class="{% if active == 'bets' %}active{% endif %}">My Bets</a>
-                <a href="{% url 'web:logout' %}">Logout ({{ user.email }})</a>
+                <form class="logout-form" method="post" action="{% url 'web:logout' %}">
+                    {% csrf_token %}
+                    <button type="submit">Logout ({{ user.email }})</button>
+                </form>
             {% else %}
                 <a href="{% url 'web:login' %}">Login</a>
                 <a href="{% url 'web:register' %}">Register</a>

@@ -11,6 +11,23 @@ class PaymentWebhookView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        provider = get_payment_provider()
+
+        # Verify the signature before processing if the provider supports it.
+        try:
+            valid = provider.verify_webhook(
+                request.data,
+                headers=request.headers,
+            )
+        except Exception:
+            valid = False
+
+        if not valid:
+            return Response(
+                {'error': 'Invalid webhook signature.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         external_id = request.data.get('external_id')
         provider_status = request.data.get('status', '').upper()
 
@@ -20,7 +37,6 @@ class PaymentWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        provider = get_payment_provider()
         if provider.is_success_payment_status(provider_status):
             try:
                 handle_deposit_success(external_id)

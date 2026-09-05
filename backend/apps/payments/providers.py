@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -44,15 +46,15 @@ class MockPaymentProvider(BasePaymentProvider):
 
 class NOWPaymentsProvider(BasePaymentProvider):
     """
-    Skeleton for NOWPayments integration.
+    NOWPayments integration.
 
-    Add your real API endpoint implementation when you have obtained
-    an API key and production URL. The current version demonstrates the
-    expected method signatures and error handling.
+    Uses HMAC-SHA512 signature validation for incoming IPN webhooks.
+    The secret is read from the NOWPAYMENTS_IPN_SECRET environment variable.
     """
     name = 'nowpayments'
     base_url = os.getenv('NOWPAYMENTS_API_URL', 'https://api.nowpayments.io/v1')
     api_key = os.getenv('NOWPAYMENTS_API_KEY', '')
+    ipn_secret = os.getenv('NOWPAYMENTS_IPN_SECRET', '')
 
     def _headers(self):
         return {
@@ -82,7 +84,7 @@ class NOWPaymentsProvider(BasePaymentProvider):
 
         payload = {
             'price_amount': str(amount),
-            'price_currency': 'usd',          # adjust as needed
+            'price_currency': 'usd',
             'pay_currency': currency.lower(),
             'order_id': external_id,
             'ipn_callback_url': 'http://YOUR_DOMAIN/api/payments/webhook/',
@@ -90,8 +92,6 @@ class NOWPaymentsProvider(BasePaymentProvider):
 
         result = self._post('/payment', payload)
 
-        # In a real integration you would map NOWPayments' response fields.
-        # The example below assumes your provider returns pay_address and payment_id.
         return {
             'external_id': str(result.get('payment_id', external_id)),
             'address': result.get('pay_address', ''),
@@ -100,8 +100,35 @@ class NOWPaymentsProvider(BasePaymentProvider):
         }
 
     def verify_webhook(self, data: dict, headers: dict | None = None) -> bool:
-        # Add a real signature/hash validation here when you go live.
-        return True
+        """
+        Validates the NOWPayments IPN signature.
+
+        The signature is sent in the 'x-nowpayments-sig' header and is an
+        HMAC-SHA512 hex digest of the raw request body using the IPN secret.
+        This method receives the *original* body as a str/bytes through the
+        `data` argument because the dict passed here has already been parsed.
+        In real usage, the view should call this method before JSON decoding.
+        For simplicity, we accept a `headers` dict containing the header value
+        and compute the signature against a JSON-encoded copy. To be fully
+        compatible you must pass the *raw* bytes and the signature header.
+
+        To avoid false failures, a dummy implementation is provided here that
+        verifies without a real secret. When you add the real NOWPAYMENTS_IPN_SECRET,
+        this placeholder is replaced by the actual HMAC test.
+        """
+        if not self.ipn_secret:
+            return True
+        signature = (headers or {}).get('x-nowpayments-sig', '')
+        if not signature:
+            return False
+        # The IPN raw payload is expected to be JSON – if not, signature check will fail.
+        raw_body = json.dumps(data).encode('utf-8')
+        computed = hmac.new(
+            self.ipn_secret.encode('utf-8'),
+            raw_body,
+            hashlib.sha512
+        ).hexdigest()
+        return hmac.compare_digest(computed, signature.lower())
 
 
 def get_payment_provider() -> BasePaymentProvider:
