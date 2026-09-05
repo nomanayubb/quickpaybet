@@ -21,6 +21,9 @@ class BasePaymentProvider:
         """
         raise NotImplementedError
 
+    def create_withdrawal(self, user, amount: Decimal, address: str, currency: str = 'USDT', external_id: str = '') -> dict:
+        raise NotImplementedError
+
     def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
         raise NotImplementedError
 
@@ -41,13 +44,22 @@ class MockPaymentProvider(BasePaymentProvider):
             'provider': self.name,
         }
 
+    def create_withdrawal(self, user, amount: Decimal, address: str, currency: str = 'USDT', external_id: str = '') -> dict:
+        if not external_id:
+            external_id = f"wd_{uuid.uuid4().hex}"
+        return {
+            'external_id': external_id,
+            'provider': self.name,
+            'status': 'success',
+        }
+
     def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
         return True
 
 
 class NOWPaymentsProvider(BasePaymentProvider):
     """
-    Real NOWPayments integration (production-ready skeleton).
+    NOWPayments integration.
 
     Requires PAYMENT_PROVIDER=nowpayments and:
       NOWPAYMENTS_API_KEY
@@ -92,7 +104,6 @@ class NOWPaymentsProvider(BasePaymentProvider):
         if not external_id:
             external_id = f"dep_{uuid.uuid4().hex}"
 
-        # NOWPayments expects `pay_currency` like 'usdttrc20' but can also accept 'usdt'
         normalized_currency = currency.upper()
         payload = {
             'price_amount': str(amount),
@@ -118,6 +129,28 @@ class NOWPaymentsProvider(BasePaymentProvider):
             'address': result.get('pay_address', ''),
             'provider': self.name,
             'payload': result,
+        }
+
+    def create_withdrawal(self, user, amount: Decimal, address: str, currency: str = 'USDT', external_id: str = '') -> dict:
+        """
+        Skeleton for NOWPayments payouts.
+        You must implement the actual /payment request with a live API key.
+        """
+        if not external_id:
+            external_id = f"wd_{uuid.uuid4().hex}"
+
+        payload = {
+            'withdrawal': address,
+            'currency': currency.upper(),
+            'amount': str(amount),
+        }
+
+        # Placeholder result – real implementation would require an additional
+        # endpoint and credentials. For now we mark it as always successful.
+        return {
+            'external_id': external_id,
+            'provider': self.name,
+            'status': 'pending',
         }
 
     def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
