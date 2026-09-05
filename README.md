@@ -2,23 +2,29 @@
 
 A modular, multi‑role betting platform with real‑time odds, cryptocurrency payments, and an extensible admin panel.
 
-**Status:** Project Foundation (Documentation phase – no production code yet)
+**Status:** MVP Backend in Development  
+**Docs:** See `docs/` for architecture, tech stack, and roadmap.
 
 ## Goals
 - User bets on live matches with real‑time odds.
 - Automatic bet settlement and crypto payment verification.
-- Admin/master/affiliate management.
-- High extensibility for future features (casino, other payment methods, etc.).
+- Admin/master/agent/user management with configurable bet limits.
+- High extensibility for future features (casino, more payment methods, live odds providers, etc.).
 - Strict security and auditability.
 
-## Repository Layout (planned)
-- `backend/` – Django + Django REST Framework API
-- `frontend/` – Next.js (React) web application
-- `docs/` – All project documentation
-- `infra/` – Deployment and infrastructure files
-- `scripts/` – Development and operational commands
+## Current Backend Capabilities
 
-## Decision Records
-Initial technology decisions are recorded in `docs/TECH_STACK.md`.
-Architecture is in `docs/SYSTEM_ARCHITECTURE.md`.
-Implementation roadmap is in `docs/IMPLEMENTATION_ROADMAP.md`.
+| Feature | Status |
+|---------|--------|
+| Custom user model (email login) with roles (user/agent/master/admin) | Implemented |
+| JWT authentication (register, login, refresh, `/me`) | Implemented |
+| User hierarchy (`parent` field) and betting limits | Implemented |
+| Wallet + transaction history + atomic deposit/withdrawal | Implemented (mock crypto flow) |
+| Sports, tournaments, matches and odds | Implemented (manual admin/admin API) |
+| Bet placement, user bet list | Implemented |
+| Bet settlement / refund services | Implemented |
+| Admin actions to settle/cancel matches | Implemented |
+| Reporting overview & daily report | Implemented |
+| Docker + Docker Compose for local development | Implemented |
+
+## Repository Layout

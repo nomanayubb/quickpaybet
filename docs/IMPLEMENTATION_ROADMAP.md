@@ -1,82 +1,85 @@
 # QuickPayBet – Implementation Roadmap (Phased)
 
 ## Phase 0 – Documentation Approval
-Current status: awaiting `DOCUMENTATION APPROVED – START IMPLEMENTATION`.
+- [x] Approved by client  
+- [x] Initial architecture, technology stack, and roadmap committed
 
 ## Phase 1 – Repository & Backend Foundation
-- Create Django project & apps: `accounts`, `wallet`, `sports`, `bets`, `admin_panel`, `reports`
-- Docker + Docker Compose environment
-- PostgreSQL connection with migrations
-- Base User model (roles: user, agent, master, admin)
-- Dummy seed data
+- [x] Django project & core apps created (`accounts`, `wallet`, `sports`, `bets`, `reports`)
+- [x] Docker + Docker Compose environment configured
+- [x] PostgreSQL, Redis, Celery wired in settings
+- [x] Base `User` model with roles (`user`, `agent`, `master`, `admin`)
+- [x] Initial database migrations for accounts, wallet, sports, bets
 
 ## Phase 2 – Authentication & Permissions
-- JWT authentication
-- Role‑based permissions
-- Admin interface (Django Admin at first, custom UI later)
-- Password reset, email verification
+- [x] JWT authentication (register, login, refresh)
+- [x] `MeView` returning current user
+- [x] Role‑based permissions for admin/master endpoints
+- [x] `parent` hierarchy and per‑user betting limits
+- [ ] Password reset & email verification (planned next)
 
 ## Phase 3 – Sports / Matches / Odds
-- Model for sports, tournaments, matches, outcomes
-- Manual odds creation (admin)
-- Odds provider adapter interface (initial implementation can be a fixed odds feed or admin-entered odds)
+- [x] Models for `Sport`, `Tournament`, `Match`
+- [x] Public match list & detail API
+- [x] Admin/master update of match odds
+- [ ] Odds provider adapter & automated feed (later)
 
 ## Phase 4 – Wallet & Crypto Payments
-- Wallet model with atomic transactions
-- NOWPayments integration
-- Deposit/withdrawal webhooks
-- Transaction history
+- [x] Wallet model with atomic transactions
+- [x] Transaction history endpoint
+- [x] Deposit / withdraw endpoints (mock immediate flow)
+- [ ] Real crypto gateway integration (NOWPayments adapter + webhook)
 
 ## Phase 5 – Betting Engine
-- Betting, stake, and balance reservation
-- Multiple bet types (singles/parlay placeholder)
-- Close odds for start time
+- [x] `Bet` model (selection, stake, odds, status)
+- [x] `place_bet` service with atomic balance reservation
+- [x] `My Bets` API
+- [ ] Multi‑bet bundles / parlays, cash‑out, custom rules
 
 ## Phase 6 – Settlement Automation
-- Read match result (manually or from feed)
-- Celery task to settle bets
-- Cron/scheduled job to close/verify bets
+- [x] Manual admin actions to settle / cancel matches
+- [x] `settle_bets_for_match` service
+- [ ] Celery‑based automatic settlement
+- [ ] Scheduled job to fetch match results / close odds
 
 ## Phase 7 – Admin Panel Custom UI
-- Next.js admin dashboard
-- Manage matches, odds, users, bets manually
-- Audit log viewer
-- Reports module
+- [x] Django admin can manage core models
+- [ ] Next.js admin dashboard with custom views for matches, odds, users, bets, reports
 
 ## Phase 8 – Reports & Analytics
-- Daily/monthly turnover reports
-- PnL by match
-- User activity
-- Payment success/failure stats
+- [x] Basic overview / daily report endpoints (admin/master)
+- [ ] Drill‑down by sport, user, match
+- [ ] Payout / profit / payment success analytics
 
 ## Phase 9 – Security & Hardening
-- Rate limiting
-- Input validation across all APIs
-- OWASP security checks
-- XSS/CSRF protections
-- Penetration testing checklist
+- [ ] Rate limiting
+- [ ] Input validation audit
+- [ ] OWASP security review
+- [ ] XSS/CSRF protection
+- [ ] Penetration testing checklist
 
 ## Phase 10 – Frontend (Public Site)
-- Registration/Login/Profile
-- Match list with live odds
-- Bet slip and placement
-- Transaction history
-- Withdrawal flow
+- [ ] Next.js scaffold
+- [ ] Registration, login, profile
+- [ ] Match list and odds display
+- [ ] Bet slip and bet placement
+- [ ] Wallet deposit / withdraw UI
+- [ ] Bet history display
 
 ## Phase 11 – Testing & QA
-- Unit tests for services
-- API integration tests
-- Frontend component tests
-- End‑to‑end tests for key flows
+- [ ] Unit tests for services
+- [ ] API integration tests
+- [ ] Frontend component tests
+- [ ] End‑to‑end tests for wallet → bet → settlement flow
 
 ## Phase 12 – Deployment
-- Production‑grade Docker Compose
-- Nginx/Let’s Encrypt
-- Postgres backup automation
-- Monitoring with Prometheus/Grafana (free)
+- [ ] Production‑grade Docker Compose
+- [ ] Nginx / Let’s Encrypt
+- [ ] Postgres backup automation
+- [ ] Monitoring (Prometheus / Grafana)
 
 ## Continuous Flexibilities
-- New payment providers added via adapter layer
-- New odds providers via adapter layer
-- Role permissions can be extended without core changes
-- Plugin‑style architecture for future features (casino, live chat, etc.)
+- Payment providers are behind an adapter interface – add new providers later.
+- Odds providers are behind an adapter interface – swap feeds later.
+- Role permissions can be extended without core changes.
+- Each domain is a separate Django app, allowing independent evolution.
