@@ -1,14 +1,32 @@
+from decimal import Decimal
+
 from django.core.management.base import BaseCommand
 from django.utils.dateparse import parse_datetime
 
 from apps.sports.models import Sport, Tournament, Match
+from apps.sports.pricing import normalize_odds
 from apps.sports.providers import get_odds_provider
 
 
 class Command(BaseCommand):
-    help = 'Fetch matches/odds from the configured provider and upsert them.'
+    help = 'Fetch matches/odds from the configured provider, normalize them, and upsert.'
 
-    def _process_match(self, sport, item, created_counter, updated_counter):
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--margin',
+            type=float,
+            default=0.05,
+            help='Target overround margin (e.g. 0.05 for 5%).',
+        )
+
+    def _process_match(
+        self,
+        sport,
+        item,
+        created_counter,
+        updated_counter,
+        margin: Decimal,
+    ):
         tournament_name = item.get('tournament_name', '').strip()
         if not tournament_name:
             tournament_name = sport.name
@@ -24,11 +42,22 @@ class Command(BaseCommand):
             self.stderr.write(f"Invalid start_time: {item['start_time']}")
             return created_counter, updated_counter
 
+        try:
+            odds_home, odds_draw, odds_away = normalize_odds(
+                item['odds_home'],
+                item['odds_draw'],
+                item['odds_away'],
+                margin=margin,
+            )
+        except (ValueError, ZeroDivisionError) as exc:
+            self.stderr.write(f"Skipping {item['home_team']} v {item['away_team']}: {exc}")
+            return created_counter, updated_counter
+
         defaults = {
             'tournament': tournament,
-            'odds_home': item['odds_home'],
-            'odds_draw': item['odds_draw'],
-            'odds_away': item['odds_away'],
+            'odds_home': odds_home,
+            'odds_draw': odds_draw,
+            'odds_away': odds_away,
             'status': Match.Status.SCHEDULED,
         }
 
@@ -46,6 +75,7 @@ class Command(BaseCommand):
         return created_counter, updated_counter
 
     def handle(self, *args, **options):
+        margin = Decimal(str(options.get('margin', 0.05)))
         provider = get_odds_provider()
         self.stdout.write(f'Fetching matches from provider: {provider.name}')
 
@@ -62,7 +92,13 @@ class Command(BaseCommand):
                         'provider_key': item.get('sport_slug', ''),
                     },
                 )
-                created, updated = self._process_match(sport, item, created, updated)
+                created, updated = self._process_match(
+                    sport,
+                    item,
+                    created,
+                    updated,
+                    margin,
+                )
         else:
             for sport in Sport.objects.filter(is_active=True).order_by('name'):
                 sport_key = sport.provider_key.strip()
@@ -88,7 +124,13 @@ class Command(BaseCommand):
                     continue
 
                 for item in sport_matches:
-                    created, updated = self._process_match(sport, item, created, updated)
+                    created, updated = self._process_match(
+                        sport,
+                        item,
+                        created,
+                        updated,
+                        margin,
+                    )
 
         self.stdout.write(self.style.SUCCESS(
             f'Finished: {created} created, {updated} updated.'
