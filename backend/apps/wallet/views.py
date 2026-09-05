@@ -1,6 +1,9 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 
+from apps.payments.serializers import CryptoPaymentSerializer
+from apps.payments.services import create_deposit
+
 from .models import Wallet, WalletTransaction
 from .serializers import (
     WalletSerializer,
@@ -8,7 +11,7 @@ from .serializers import (
     DepositSerializer,
     WithdrawSerializer,
 )
-from .services import deposit_funds, withdraw_funds
+from .services import withdraw_funds
 
 
 class WalletDetailView(generics.RetrieveAPIView):
@@ -37,17 +40,13 @@ class DepositView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        txn = deposit_funds(
+        payment = create_deposit(
             user=request.user,
             amount=serializer.validated_data['amount'],
-            description=f"Crypto deposit via {serializer.validated_data.get('currency', 'USDT')}",
+            currency=serializer.validated_data.get('currency', 'USDT'),
         )
-        wallet = txn.wallet
         return Response(
-            {
-                'transaction': WalletTransactionSerializer(txn).data,
-                'wallet': WalletSerializer(wallet).data,
-            },
+            CryptoPaymentSerializer(payment).data,
             status=status.HTTP_201_CREATED,
         )
 
