@@ -2,6 +2,7 @@ import json
 import os
 import urllib.request
 import urllib.parse
+import urllib.error
 
 
 class BaseOddsProvider:
@@ -79,7 +80,7 @@ class TheyOddsAPIProvider(BaseOddsProvider):
         ).rstrip('/')
         self.sport_key = os.getenv('ODDS_SPORT_KEY', 'soccer_epl')
 
-    def _raw_get(self, path: str) -> dict | list:
+    def _raw_get(self, path: str):
         if not self.api_key:
             raise RuntimeError('ODDS_API_KEY is not configured.')
         url = f'{self.base_url}{path}'
@@ -89,8 +90,16 @@ class TheyOddsAPIProvider(BaseOddsProvider):
             url += f'?apiKey={urllib.parse.quote(self.api_key)}'
 
         request = urllib.request.Request(url)
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode('utf-8'))
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            # HTTP 422 from The Odds API means “no odds are currently available
+            # for that sport + region + market combination.” Treat this as an
+            # empty response rather than a hard failure.
+            if exc.code == 422:
+                return []
+            raise
 
     def fetch_matches(self, sport_key=None) -> list[dict]:
         """Fetch scheduled matches / odds for a configured sport key."""
@@ -98,8 +107,10 @@ class TheyOddsAPIProvider(BaseOddsProvider):
         # Use the passed sport_key if provided, otherwise use the env default
         key = sport_key or self.sport_key
 
-        # Get odds from the real provider
-        path = f'/sports/{key}/odds/?regions=eu&markets=h2h,draw'
+        # Get odds from the real provider.
+        # The Odds API only accepts "h2h" as a valid market key.
+        # The "h2h" market already returns a "Draw" outcome for sports that support it.
+        path = f'/sports/{key}/odds/?regions=eu&markets=h2h&oddsFormat=decimal'
         raw_data = self._raw_get(path)
 
         if not isinstance(raw_data, list):
@@ -114,12 +125,12 @@ class TheyOddsAPIProvider(BaseOddsProvider):
                 continue
 
             odds_home = odds_draw = odds_away = None
-            # The Odds API returns multiple books/markets. We use the first H2H market.
+            # The Odds API returns multiple bookmakers. We use the first H2H market.
             for book in event_data.get('bookmakers', []):
                 for market in book.get('markets', []):
                     if market.get('key') != 'h2h':
                         continue
-                    # h2h outcomes: "Home", "Draw", "Away"
+                    # H2H outcomes: "Home", "Draw", "Away"
                     for outcome in market.get('outcomes', []):
                         price = str(outcome.get('price', ''))
                         name = outcome.get('name', '')
@@ -129,12 +140,12 @@ class TheyOddsAPIProvider(BaseOddsProvider):
                             odds_draw = price
                         elif 'away' in name.lower():
                             odds_away = price
-                    # Use first H2H book only
+                    # Use the first H2H book only
                     break
                 if odds_home or odds_draw or odds_away:
                     break
 
-            if not (odds_home and odds_draw and odds_away):
+            if not (odds_home and odds_away):
                 continue
 
             normalized.append({
@@ -146,7 +157,7 @@ class TheyOddsAPIProvider(BaseOddsProvider):
                 'away_team': away_team,
                 'start_time': start_time,
                 'odds_home': odds_home,
-                'odds_draw': odds_draw,
+                'odds_draw': odds_draw,     # Can be None when no draw outcome
                 'odds_away': odds_away,
             })
 
