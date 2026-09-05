@@ -1,0 +1,39 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>My Parlay Bets</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Stake</th>
+                <th>Total Odds</th>
+                <th>Potential Payout</th>
+                <th>Status</th>
+                <th>Legs</th>
+                <th>Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for parlay in parlays %}
+                <tr>
+                    <td>{{ parlay.id }}</td>
+                    <td>{{ parlay.stake }}</td>
+                    <td>{{ parlay.total_odds }}</td>
+                    <td>{{ parlay.potential_payout }}</td>
+                    <td>{{ parlay.status }}</td>
+                    <td>
+                        <ul>
+                            {% for leg in parlay.legs.all %}
+                                <li>{{ leg.match.home_team }} v {{ leg.match.away_team }} – {{ leg.selection }} @ {{ leg.odds }} (<span>{{ leg.outcome }}</span>)</li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                    <td>{{ parlay.created_at }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">You have no parlay bets yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

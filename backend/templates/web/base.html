@@ -68,6 +68,8 @@
                     <a href="{% url 'web:admin_matches' %}" class="{% if active == 'admin_matches' %}active{% endif %}">Manage Matches</a>
                     <a href="{% url 'web:admin_users' %}" class="{% if active == 'admin_users' %}active{% endif %}">Manage Users</a>
                 {% endif %}
+                <a href="{% url 'web:parlay_bet' %}" class="{% if active == 'parlay_bet' %}active{% endif %}">Parlay Bet</a>
+                <a href="{% url 'web:parlay_history' %}" class="{% if active == 'parlay_history' %}active{% endif %}">My Parlays</a>
                 <a href="{% url 'web:wallet' %}" class="{% if active == 'wallet' %}active{% endif %}">Wallet</a>
                 <a href="{% url 'web:bets' %}" class="{% if active == 'bets' %}active{% endif %}">My Bets</a>
                 <a href="{% url 'web:logout' %}">Logout ({{ user.email }})</a>

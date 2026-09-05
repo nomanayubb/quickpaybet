@@ -12,8 +12,8 @@ from decimal import Decimal, InvalidOperation
 
 from apps.accounts.models import User
 from apps.audit.models import AuditLog
-from apps.bets.models import Bet
-from apps.bets.services import place_bet, refund_bet, settle_bets_for_match
+from apps.bets.models import Bet, ParlayBet
+from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
 from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds, withdraw_funds
@@ -401,6 +401,74 @@ def place_bet_view(request, pk):
                 },
             )
     return redirect('web:match_detail', pk=match.pk)
+
+
+@login_required
+def parlay_bet_view(request):
+    matches = Match.objects.filter(
+        status__in=[Match.Status.SCHEDULED, Match.Status.LIVE],
+        odds_home__isnull=False,
+        odds_away__isnull=False,
+    ).select_related('sport', 'tournament').order_by('start_time')
+
+    error = None
+
+    if request.method == 'POST':
+        try:
+            stake_raw = request.POST.get('stake')
+            if not stake_raw:
+                raise ValidationError('Stake is required.')
+            stake = Decimal(stake_raw)
+            if stake <= 0:
+                raise ValidationError('Stake must be positive.')
+
+            selections = []
+            for key, value in request.POST.items():
+                if key.startswith('selection_'):
+                    try:
+                        match_id = int(key.split('_')[1])
+                    except (ValueError, IndexError):
+                        continue
+                    if value in Bet.Selection.values:
+                        selections.append({
+                            'match': match_id,
+                            'selection': value,
+                        })
+
+            if len(selections) < 2:
+                raise ValidationError('A parlay bet requires at least two selections.')
+
+            parlay = place_parlay_bet(
+                user=request.user,
+                stake=stake,
+                selections=selections,
+            )
+            return redirect('web:parlay_history')
+        except (ValidationError, InvalidOperation, ValueError) as exc:
+            error = str(exc)
+
+    return render(
+        request,
+        'web/parlay_bet.html',
+        {
+            'matches': matches,
+            'error': error,
+            'active': 'parlay_bet',
+        },
+    )
+
+
+@login_required
+def parlay_history_view(request):
+    parlays = ParlayBet.objects.filter(user=request.user).prefetch_related('legs__match')
+    return render(
+        request,
+        'web/parlay_history.html',
+        {
+            'parlays': parlays,
+            'active': 'parlay_history',
+        },
+    )
 
 
 @login_required

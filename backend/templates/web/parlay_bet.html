@@ -1,0 +1,54 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Build a Parlay Bet</h1>
+    <p>Choose at least two matches and one outcome for each. The combined odds will be calculated automatically.</p>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    {% if not user.is_authenticated %}
+        <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to place a parlay bet.</p>
+    {% elif matches %}
+        <form method="post">
+            {% csrf_token %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Match</th>
+                        <th>Sport / Tournament</th>
+                        <th>Start</th>
+                        <th>Selection</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for match in matches %}
+                        <tr>
+                            <td>{{ match.home_team }} v {{ match.away_team }}</td>
+                            <td>{{ match.sport.name }} / {{ match.tournament.name|default:"-" }}</td>
+                            <td>{{ match.start_time }}</td>
+                            <td>
+                                <select name="selection_{{ match.id }}">
+                                    <option value="">— none —</option>
+                                    <option value="home">Home – {{ match.odds_home|default:"-" }}</option>
+                                    {% if match.odds_draw %}
+                                        <option value="draw">Draw – {{ match.odds_draw }}</option>
+                                    {% endif %}
+                                    <option value="away">Away – {{ match.odds_away|default:"-" }}</option>
+                                </select>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="form-group">
+                <label>Stake</label>
+                <input type="number" name="stake" step="0.0001" min="0" placeholder="Enter your stake" required>
+            </div>
+            <button type="submit" class="btn">Place Parlay Bet</button>
+        </form>
+    {% else %}
+        <p>There are no matches currently available for parlays.</p>
+    {% endif %}
+{% endblock %}
