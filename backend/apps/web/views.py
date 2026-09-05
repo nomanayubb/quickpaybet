@@ -120,6 +120,83 @@ def admin_sports_view(request):
     )
 
 
+def admin_create_match_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    sports = Sport.objects.order_by('name')
+    tournaments = Tournament.objects.select_related('sport').order_by('name')
+    error = None
+
+    if request.method == 'POST':
+        try:
+            sport_id = request.POST.get('sport_id', '').strip()
+            tournament_id = request.POST.get('tournament_id', '').strip()
+            home_team = request.POST.get('home_team', '').strip()
+            away_team = request.POST.get('away_team', '').strip()
+            start_time_raw = request.POST.get('start_time', '').strip()
+            odds_home_raw = request.POST.get('odds_home', '').strip()
+            odds_draw_raw = request.POST.get('odds_draw', '').strip()
+            odds_away_raw = request.POST.get('odds_away', '').strip()
+
+            if not home_team or not away_team:
+                raise ValidationError('Team names are required.')
+            if not start_time_raw:
+                raise ValidationError('Start time is required.')
+
+            start_time = parse_datetime(start_time_raw)
+            if start_time is None:
+                raise ValidationError('Invalid start time. Use YYYY-MM-DDTHH:MM format.')
+
+            try:
+                sport = Sport.objects.get(pk=sport_id)
+            except Sport.DoesNotExist:
+                raise ValidationError('Please select a valid sport.')
+
+            tournament = None
+            if tournament_id:
+                tournament = Tournament.objects.filter(pk=tournament_id, sport=sport).first()
+                if tournament is None:
+                    raise ValidationError('Selected tournament is not valid for that sport.')
+
+            def parse_decimal(value):
+                if value == '' or value is None:
+                    return None
+                try:
+                    d = Decimal(value)
+                except InvalidOperation:
+                    raise ValidationError('Odds must be a valid decimal number.')
+                if d <= 0:
+                    raise ValidationError('Odds must be positive.')
+                return d
+
+            Match.objects.create(
+                sport=sport,
+                tournament=tournament,
+                home_team=home_team,
+                away_team=away_team,
+                start_time=start_time,
+                status=Match.Status.SCHEDULED,
+                odds_home=parse_decimal(odds_home_raw),
+                odds_draw=parse_decimal(odds_draw_raw),
+                odds_away=parse_decimal(odds_away_raw),
+            )
+            return redirect('web:admin_matches')
+        except (ValidationError, InvalidOperation, ValueError) as exc:
+            error = str(exc)
+
+    return render(
+        request,
+        'web/admin_match_create.html',
+        {
+            'sports': sports,
+            'tournaments': tournaments,
+            'error': error,
+            'active': 'admin_matches',
+        },
+    )
+
+
 def admin_matches_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")

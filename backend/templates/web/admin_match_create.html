@@ -1,0 +1,58 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Create New Match</h1>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label>Sport</label>
+            <select name="sport_id" required>
+                <option value="">— Pick a sport —</option>
+                {% for sport in sports %}
+                    <option value="{{ sport.id }}">{{ sport.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Tournament (optional)</label>
+            <select name="tournament_id">
+                <option value="">— None —</option>
+                {% for tournament in tournaments %}
+                    <option value="{{ tournament.id }}">{{ tournament.sport.name }} – {{ tournament.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Home team</label>
+            <input type="text" name="home_team" required>
+        </div>
+        <div class="form-group">
+            <label>Away team</label>
+            <input type="text" name="away_team" required>
+        </div>
+        <div class="form-group">
+            <label>Start time (YYYY-MM-DDTHH:MM)</label>
+            <input type="datetime-local" name="start_time" required>
+        </div>
+        <div class="form-group">
+            <label>Odds – Home</label>
+            <input type="number" name="odds_home" step="0.01" min="1.01" value="" placeholder="Optional">
+        </div>
+        <div class="form-group">
+            <label>Odds – Draw</label>
+            <input type="number" name="odds_draw" step="0.01" min="1.01" value="" placeholder="Optional">
+        </div>
+        <div class="form-group">
+            <label>Odds – Away</label>
+            <input type="number" name="odds_away" step="0.01" min="1.01" value="" placeholder="Optional">
+        </div>
+        <button type="submit" class="btn">Create Match</button>
+    </form>
+
+    <p><a href="{% url 'web:admin_matches' %}">← Back to match list</a></p>
+{% endblock %}
