@@ -7,4 +7,5 @@ urlpatterns = [
     path('api/', include('apps.wallet.urls')),
     path('api/', include('apps.sports.urls')),
     path('api/', include('apps.bets.urls')),
+    path('api/', include('apps.reports.urls')),
 ]
