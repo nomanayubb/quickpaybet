@@ -12,7 +12,7 @@ from apps.sports.models import Sport, Match
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 from .models import Bet, ParlayBet
-from .services import place_bet, place_parlay_bet, settle_bets_for_match
+from .services import settle_bet, place_bet, place_parlay_bet, settle_bets_for_match
 
 User = get_user_model()
 
