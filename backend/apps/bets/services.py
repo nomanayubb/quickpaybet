@@ -300,7 +300,17 @@ def settle_bets_for_match(match: Match):
     if match.status not in (Match.Status.FINISHED, Match.Status.CANCELLED):
         return
 
-    # Settle single bets
+    # Refund pending single bets when the match is cancelled
+    if match.status == Match.Status.CANCELLED:
+        pending_bets = Bet.objects.select_for_update().filter(
+            match=match,
+            status=Bet.Status.PENDING,
+        )
+        for bet in pending_bets:
+            with transaction.atomic():
+                refund_bet(bet)
+
+    # Settle single bets when the match has a final score
     if match.status == Match.Status.FINISHED and match.home_score is not None and match.away_score is not None:
         if match.home_score > match.away_score:
             match_result = Bet.Selection.HOME

@@ -1,8 +1,7 @@
 from django.contrib import admin, messages
 
 from .models import Sport, Tournament, Match
-from apps.bets.models import Bet
-from apps.bets.services import settle_bets_for_match, refund_bet
+from apps.bets.services import settle_bets_for_match
 
 
 @admin.register(Sport)
@@ -72,12 +71,10 @@ class MatchAdmin(admin.ModelAdmin):
             if match.status == Match.Status.CANCELLED:
                 continue
 
-            pending_bets = Bet.objects.filter(match=match, status=Bet.Status.PENDING)
-            for bet in pending_bets:
-                refund_bet(bet)
-
             match.status = Match.Status.CANCELLED
             match.save(update_fields=['status', 'updated_at'])
+            # This refunds single bets and marks all parlay legs as refunded
+            settle_bets_for_match(match)
             cancelled += 1
 
         self.message_user(request, f'{cancelled} match(es) cancelled and bets refunded.')

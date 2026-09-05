@@ -177,12 +177,10 @@ def admin_cancel_match_view(request, match_id):
 
     match = get_object_or_404(Match, pk=match_id)
 
-    pending_bets = Bet.objects.filter(match=match, status=Bet.Status.PENDING)
-    for bet in pending_bets:
-        refund_bet(bet)
-
     match.status = Match.Status.CANCELLED
     match.save()
+    # This refunds pending single bets and marks parlay legs as refunded
+    settle_bets_for_match(match)
 
     return redirect('web:admin_matches')
 
@@ -322,7 +320,6 @@ def login_view(request):
         lockout_key = f'login_lockout_{email.lower()}'
         attempts_key = f'login_attempts_{email.lower()}'
 
-        # Check if the account is temporarily locked
         if cache.get(lockout_key):
             return render(
                 request,
@@ -332,13 +329,11 @@ def login_view(request):
 
         user = authenticate(request, email=email, password=password)
         if user is not None:
-            # Clear lockout counters after successful login
             cache.delete(attempts_key)
             cache.delete(lockout_key)
             auth_login(request, user)
             return redirect('web:home')
 
-        # Count failed attempt
         failed = cache.get_or_set(attempts_key, 0, timeout=60)
         failed += 1
         cache.set(attempts_key, failed, timeout=60)
@@ -373,8 +368,6 @@ def password_reset_request_view(request):
             token = secrets.token_urlsafe(40)
             PasswordResetToken.objects.create(user=user, token=token)
 
-            # For simplicity in this dev build, we display the token on the success page.
-            # In production you would send this via email.
             return render(
                 request,
                 'web/reset_password_done.html',
