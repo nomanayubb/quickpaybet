@@ -23,7 +23,21 @@
                     <td>{{ match.odds_home|default:"-" }} / {{ match.odds_draw|default:"-" }} / {{ match.odds_away|default:"-" }}</td>
                     <td><a class="btn" href="{% url 'web:match_detail' match.pk %}">Open</a></td>
                 </tr>
+            {% empty %}
+                <tr><td colspan="6">No matches found.</td></tr>
             {% endfor %}
         </tbody>
     </table>
+
+    {% if page_obj.has_previous or page_obj.has_next %}
+        <div style="margin-top: 20px;">
+            {% if page_obj.has_previous %}
+                <a class="btn" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+            {% endif %}
+            <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+            {% if page_obj.has_next %}
+                <a class="btn" href="?page={{ page_obj.next_page_number }}">Next</a>
+            {% endif %}
+        </div>
+    {% endif %}
 {% endblock %}

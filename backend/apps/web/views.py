@@ -1,7 +1,3 @@
-# Insert this view into the existing file at the correct location.
-# The entire updated file is shown only for the admin_audit_logs_view function,
-# but for correctness you should replace the whole file with the one below.
-
 from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import authenticate
@@ -611,8 +607,21 @@ def password_reset_confirm_view(request):
 
 
 def matches_view(request):
-    matches = Match.objects.select_related('sport', 'tournament').all()
-    return render(request, 'web/matches.html', {'matches': matches, 'active': 'matches'})
+    matches_list = Match.objects.select_related('sport', 'tournament').order_by('start_time')
+    paginator = Paginator(matches_list, 20)
+    page_number = request.GET.get('page')
+    matches = paginator.get_page(page_number)
+
+    return render(
+        request,
+        'web/matches.html',
+        {
+            'matches': matches,
+            'page_obj': matches,
+            'active': 'matches',
+        },
+    )
+
 
 def match_detail_view(request, pk):
     match = get_object_or_404(Match.objects.select_related('sport', 'tournament'), pk=pk)
