@@ -1,0 +1,39 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Audit Logs</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>User</th>
+                <th>Action</th>
+                <th>Target Type</th>
+                <th>Target ID</th>
+                <th>Metadata</th>
+                <th>IP</th>
+                <th>Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+                <tr>
+                    <td>
+                        {% if log.user %}
+                            {{ log.user.email }}
+                        {% else %}
+                            System
+                        {% endif %}
+                    </td>
+                    <td>{{ log.action }}</td>
+                    <td>{{ log.target_type|default:"-" }}</td>
+                    <td>{{ log.target_id|default:"-" }}</td>
+                    <td>{{ log.metadata|default:"" }}</td>
+                    <td>{{ log.ip_address|default:"-" }}</td>
+                    <td>{{ log.created_at }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">No audit logs yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

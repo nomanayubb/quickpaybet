@@ -1,5 +1,6 @@
 import secrets
 
+from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -73,8 +74,22 @@ class RequestPasswordResetSerializer(serializers.Serializer):
                 user=user,
                 token=token,
             )
-            # In a real implementation you would send the token by email.
-            # For development, the token is returned only in DEBUG mode.
+
+            # Actually send an email with the token
+            send_mail(
+                subject='QuickPayBet Password Reset',
+                message=(
+                    f'Hello {user.email},\n\n'
+                    f'You requested a password reset.\n'
+                    f'Your reset token is:\n\n{token}\n\n'
+                    'Use it with the Password Reset Confirm endpoint:\n'
+                    'POST /api/auth/password-reset/confirm/\n\n'
+                    'If you did not request this, please ignore this email.'
+                ),
+                from_email=None,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
         except User.DoesNotExist:
             pass
         return {'email': email}

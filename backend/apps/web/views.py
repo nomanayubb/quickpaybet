@@ -1,6 +1,7 @@
 from django.contrib.auth import login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import authenticate
+from django.core.cache import cache
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
@@ -10,6 +11,7 @@ from django.conf import settings
 from decimal import Decimal, InvalidOperation
 
 from apps.accounts.models import User
+from apps.audit.models import AuditLog
 from apps.bets.models import Bet
 from apps.bets.services import place_bet, refund_bet, settle_bets_for_match
 from apps.sports.models import Match
@@ -162,6 +164,21 @@ def admin_cancel_match_view(request, match_id):
     return redirect('web:admin_matches')
 
 
+def admin_audit_logs_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    logs = AuditLog.objects.select_related('user').order_by('-created_at')[:200]
+    return render(
+        request,
+        'web/admin_audit.html',
+        {
+            'logs': logs,
+            'active': 'audit',
+        },
+    )
+
+
 def admin_users_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
@@ -275,14 +292,37 @@ def register_view(request):
 
 
 def login_view(request):
+    # Login throttle: max 5 attempts per minute per email
+    lockout_key = 'login_lockout_{}'.format(request.POST.get('email', '').lower())
+    attempts_key = 'login_attempts_{}'.format(request.POST.get('email', '').lower())
+
     if request.method == 'POST':
         email = request.POST.get('email', '').strip()
         password = request.POST.get('password', '')
 
+        # If blocked, don't even authenticate
+        if cache.get(lockout_key):
+            return render(
+                request,
+                'web/login.html',
+                {'error': 'Too many failed attempts. Try again in 1 minute.'},
+            )
+
         user = authenticate(request, email=email, password=password)
         if user is not None:
+            # clear lockout counters
+            cache.delete(attempts_key)
+            cache.delete(lockout_key)
             auth_login(request, user)
             return redirect('web:home')
+
+        # Count failed attempt
+        failed = cache.get_or_set(attempts_key, 0, timeout=60)
+        failed += 1
+        cache.set(attempts_key, failed, timeout=60)
+        if failed >= 5:
+            cache.set(lockout_key, True, timeout=60)
+
         return render(
             request,
             'web/login.html',

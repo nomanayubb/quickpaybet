@@ -17,4 +17,8 @@ app.conf.beat_schedule = {
         'task': 'apps.bets.tasks.mark_starting_matches_live',
         'schedule': crontab(minute='*'),
     },
+    'sync-odds-recurring': {
+        'task': 'apps.sports.tasks.sync_odds_celery',
+        'schedule': crontab(hour='*/6', minute=0),
+    },
 }
