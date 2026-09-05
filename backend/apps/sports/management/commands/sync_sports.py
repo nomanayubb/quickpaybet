@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from apps.sports.models import Sport
-from apps.sports.providers import get_odds_provider
+from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
 
 
 class Command(BaseCommand):
@@ -26,6 +26,7 @@ class Command(BaseCommand):
 
         created = 0
         updated = 0
+        skipped = 0
         for item in sports_data:
             key = item.get('key')
             title = item.get('title') or key
@@ -33,6 +34,16 @@ class Command(BaseCommand):
 
             if not key:
                 self.stderr.write(self.style.WARNING(f'Skipping sport with no key: {item}'))
+                skipped += 1
+                continue
+
+            if key.lower() in INVALID_PROVIDER_KEYS:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f'Skipping sport "{title}" because "{key}" is not supported for odds sync.'
+                    )
+                )
+                skipped += 1
                 continue
 
             sport, was_created = Sport.objects.update_or_create(
@@ -49,5 +60,5 @@ class Command(BaseCommand):
                 updated += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f'Finished: {created} created, {updated} updated.'
+            f'Finished: {created} created, {updated} updated, {skipped} skipped.'
         ))

@@ -5,6 +5,9 @@ import urllib.parse
 import urllib.error
 
 
+INVALID_PROVIDER_KEYS = {'football'}  # The Odds API has no generic "football" key
+
+
 def _to_int(value):
     try:
         return int(value)
@@ -118,9 +121,10 @@ class TheyOddsAPIProvider(BaseOddsProvider):
             with urllib.request.urlopen(request, timeout=20) as response:
                 return json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as exc:
-            # HTTP 422 means “no odds are currently available
-            # for that sport + region + market combination.”
-            if exc.code == 422:
+            # 404 means an invalid sport key (e.g., "football")
+            # 422 means no odds are currently available for this sport.
+            # Both should be treated as "no data" rather than a crash.
+            if exc.code in (404, 422):
                 return []
             raise
 

@@ -5,7 +5,7 @@ from django.utils.dateparse import parse_datetime
 
 from apps.sports.models import Sport, Tournament, Match
 from apps.sports.pricing import normalize_odds
-from apps.sports.providers import get_odds_provider
+from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
 
 
 class Command(BaseCommand):
@@ -17,6 +17,12 @@ class Command(BaseCommand):
             type=float,
             default=0.05,
             help='Target overround margin (e.g. 0.05 for 5%).',
+        )
+        parser.add_argument(
+            '--sport',
+            dest='sport_provider_key',
+            default=None,
+            help='Only sync odds for this provider key (e.g. soccer_epl).',
         )
 
     def _process_match(
@@ -76,6 +82,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         margin = Decimal(str(options.get('margin', 0.05)))
+        only_provider_key = options.get('sport_provider_key')
         provider = get_odds_provider()
         self.stdout.write(f'Fetching matches from provider: {provider.name}')
 
@@ -100,12 +107,24 @@ class Command(BaseCommand):
                     margin,
                 )
         else:
-            for sport in Sport.objects.filter(is_active=True).order_by('name'):
+            sports_qs = Sport.objects.filter(is_active=True).order_by('name')
+            if only_provider_key:
+                sports_qs = sports_qs.filter(provider_key=only_provider_key)
+
+            for sport in sports_qs:
                 sport_key = sport.provider_key.strip()
                 if not sport_key:
                     self.stdout.write(
                         self.style.WARNING(
                             f'Skipping sport "{sport.name}" because it has no provider_key.'
+                        )
+                    )
+                    continue
+
+                if sport_key.lower() in INVALID_PROVIDER_KEYS:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f'Skipping sport "{sport.name}" because "{sport_key}" is not valid for The Odds API.'
                         )
                     )
                     continue

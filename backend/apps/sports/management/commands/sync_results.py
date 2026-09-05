@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.utils.dateparse import parse_datetime
 
 from apps.sports.models import Sport, Match
-from apps.sports.providers import get_odds_provider
+from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
 from apps.bets.services import settle_bets_for_match
 
 
@@ -23,6 +23,14 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     f'Skipping sport "{sport.name}" because it has no provider_key.'
+                )
+            )
+            return updated
+
+        if sport_key.lower() in INVALID_PROVIDER_KEYS:
+            self.stdout.write(
+                self.style.WARNING(
+                    f'Skipping sport "{sport.name}" because "{sport_key}" is not valid for The Odds API.'
                 )
             )
             return updated
@@ -76,10 +84,10 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING('Provider is mock; skipping result sync.'))
             return
 
-        sport_key_filter = options.get('sport_provider_key')
+        only_provider_key = options.get('sport_provider_key')
         sports_qs = Sport.objects.filter(is_active=True).order_by('name')
-        if sport_key_filter:
-            sports_qs = sports_qs.filter(provider_key=sport_key_filter)
+        if only_provider_key:
+            sports_qs = sports_qs.filter(provider_key=only_provider_key)
 
         updated = 0
         for sport in sports_qs:
