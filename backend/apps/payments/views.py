@@ -3,6 +3,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .providers import get_payment_provider
 from .services import handle_deposit_success
 
 
@@ -19,12 +20,13 @@ class PaymentWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if provider_status in ('FINISHED', 'COMPLETED', 'SUCCESS'):
+        provider = get_payment_provider()
+        if provider.is_success_payment_status(provider_status):
             try:
                 handle_deposit_success(external_id)
-            except Exception as e:
+            except Exception as exc:  # noqa: BLE001 – catch and return validation error
                 return Response(
-                    {'error': str(e)},
+                    {'error': str(exc)},
                     status=status.HTTP_400_BAD_REQUEST
                 )
         elif provider_status in ('FAILED', 'CANCELLED'):
