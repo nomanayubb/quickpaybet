@@ -11,6 +11,9 @@ class BaseOddsProvider:
     def fetch_matches(self, sport_key=None) -> list[dict]:
         raise NotImplementedError
 
+    def fetch_sports(self) -> list[dict]:
+        raise NotImplementedError
+
 
 class MockOddsProvider(BaseOddsProvider):
     """
@@ -46,6 +49,16 @@ class MockOddsProvider(BaseOddsProvider):
                 'odds_home': '2.00',
                 'odds_draw': '3.40',
                 'odds_away': '3.80',
+            },
+        ]
+
+    def fetch_sports(self) -> list[dict]:
+        return [
+            {
+                'key': 'football',
+                'title': 'Football',
+                'active': True,
+                'group': 'Football',
             },
         ]
 
@@ -138,6 +151,22 @@ class TheyOddsAPIProvider(BaseOddsProvider):
             })
 
         return normalized
+
+    def fetch_sports(self) -> list[dict]:
+        """Fetch list of supported sports from The Odds API."""
+        raw = self._raw_get('/sports/')
+        if not isinstance(raw, list):
+            return []
+
+        result = []
+        for entry in raw:
+            result.append({
+                'key': entry.get('key', ''),
+                'title': entry.get('title', ''),
+                'active': entry.get('active', True),
+                'group': entry.get('group', ''),
+            })
+        return result
 
 
 def get_odds_provider() -> BaseOddsProvider:
