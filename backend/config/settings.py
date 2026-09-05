@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     # local apps
+    'apps.common',
     'apps.accounts',
     'apps.wallet',
     'apps.sports',
