@@ -5,7 +5,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
-from .models import Bet
+from .models import Bet, ParlayBet, ParlayLeg
 
 
 def _get_bet_odds(match: Match, selection: str) -> Decimal:
@@ -75,6 +75,175 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
     return bet
 
 
+def place_parlay_bet(user, stake: Decimal, selections: list):
+    """
+    selections : list of dicts -> [{'match': int, 'selection': 'home'}, ...]
+    """
+    if stake <= 0:
+        raise ValidationError('Stake must be positive.')
+
+    if not user.is_betting_enabled:
+        raise ValidationError('Betting is disabled for your account.')
+
+    if user.min_bet_amount is not None and stake < user.min_bet_amount:
+        raise ValidationError(
+            f'Minimum stake allowed is {user.min_bet_amount}.'
+        )
+    if user.max_bet_amount is not None and stake > user.max_bet_amount:
+        raise ValidationError(
+            f'Maximum stake allowed is {user.max_bet_amount}.'
+        )
+
+    if len(selections) < 2:
+        raise ValidationError('A parlay bet requires at least two selections.')
+
+    validated_legs = []
+    combined_odds = Decimal('1.00')
+    seen_match_ids = set()
+    for item in selections:
+        match_id = item.get('match')
+        selection = item.get('selection')
+        if not match_id or selection not in Bet.Selection.values:
+            raise ValidationError('Invalid parlay selection.')
+
+        try:
+            match = Match.objects.get(pk=match_id)
+        except Match.DoesNotExist:
+            raise ValidationError('Match not found.')
+
+        if match.id in seen_match_ids:
+            raise ValidationError('Same match cannot appear twice in one parlay.')
+        seen_match_ids.add(match.id)
+
+        if match.status not in (Match.Status.SCHEDULED, Match.Status.LIVE):
+            raise ValidationError('Betting is closed for this match.')
+
+        odds = _get_bet_odds(match, selection)
+        combined_odds *= odds
+        validated_legs.append((match, selection, odds))
+
+    with transaction.atomic():
+        wallet = Wallet.objects.select_for_update().get(user=user)
+        if wallet.balance < stake:
+            raise ValidationError('Insufficient balance.')
+
+        wallet.balance -= stake
+        wallet.save(update_fields=['balance', 'updated_at'])
+
+        WalletTransaction.objects.create(
+            wallet=wallet,
+            txn_type=WalletTransaction.TxnType.BET_PLACED,
+            amount=-stake,
+            status=WalletTransaction.Status.COMPLETED,
+            balance_after=wallet.balance,
+            description=f'Parlay bet placed ({len(validated_legs)} legs)',
+        )
+
+        parlay = ParlayBet.objects.create(
+            user=user,
+            stake=stake,
+            total_odds=combined_odds,
+            potential_payout=stake * combined_odds,
+            status=ParlayBet.Status.PENDING,
+        )
+
+        for match, selection, odds in validated_legs:
+            ParlayLeg.objects.create(
+                parlay=parlay,
+                match=match,
+                selection=selection,
+                odds=odds,
+            )
+
+    return parlay
+
+
+def _settle_parlay_if_ready(parlay_id: int):
+    with transaction.atomic():
+        parlay = ParlayBet.objects.select_for_update().get(pk=parlay_id)
+        if parlay.status != ParlayBet.Status.PENDING:
+            return
+
+        legs = list(parlay.legs.all())
+        pending = any(leg.outcome == ParlayLeg.Outcome.PENDING for leg in legs)
+        if pending:
+            return
+
+        has_lost = any(leg.outcome == ParlayLeg.Outcome.LOST for leg in legs)
+        if has_lost:
+            parlay.status = ParlayBet.Status.LOST
+            parlay.save(update_fields=['status', 'updated_at'])
+            return
+
+        has_refunded = any(leg.outcome == ParlayLeg.Outcome.REFUNDED for leg in legs)
+        if has_refunded:
+            # Refund full stake when any leg is refunded and no leg has lost.
+            wallet = Wallet.objects.select_for_update().get(user=parlay.user)
+            wallet.balance += parlay.stake
+            wallet.save(update_fields=['balance', 'updated_at'])
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                txn_type=WalletTransaction.TxnType.BET_REFUND,
+                amount=parlay.stake,
+                status=WalletTransaction.Status.COMPLETED,
+                balance_after=wallet.balance,
+                description=f'Parlay refund – {parlay.legs.count()} legs',
+            )
+            parlay.status = ParlayBet.Status.REFUNDED
+            parlay.save(update_fields=['status', 'updated_at'])
+            return
+
+        all_won = all(leg.outcome == ParlayLeg.Outcome.WON for leg in legs)
+        if all_won and len(legs) > 0:
+            wallet = Wallet.objects.select_for_update().get(user=parlay.user)
+            wallet.balance += parlay.potential_payout
+            wallet.save(update_fields=['balance', 'updated_at'])
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                txn_type=WalletTransaction.TxnType.BET_WON,
+                amount=parlay.potential_payout,
+                status=WalletTransaction.Status.COMPLETED,
+                balance_after=wallet.balance,
+                description=f'Parlay won – {parlay.legs.count()} legs',
+            )
+            parlay.status = ParlayBet.Status.WON
+            parlay.save(update_fields=['status', 'updated_at'])
+
+
+def settle_parlays_for_match(match: Match):
+    """Settle pending parlay legs for a finished / cancelled match."""
+    legs = ParlayLeg.objects.select_for_update().filter(
+        match=match,
+        outcome=ParlayLeg.Outcome.PENDING,
+    )
+    if not legs.exists():
+        return
+
+    affected_parlay_ids = set(legs.values_list('parlay_id', flat=True))
+
+    if match.status == Match.Status.CANCELLED:
+        legs.update(outcome=ParlayLeg.Outcome.REFUNDED)
+    elif match.status == Match.Status.FINISHED:
+        if match.home_score is None or match.away_score is None:
+            return
+        if match.home_score > match.away_score:
+            match_result = Bet.Selection.HOME
+        elif match.away_score > match.home_score:
+            match_result = Bet.Selection.AWAY
+        else:
+            match_result = Bet.Selection.DRAW
+
+        for leg in legs:
+            if leg.selection == match_result:
+                leg.outcome = ParlayLeg.Outcome.WON
+            else:
+                leg.outcome = ParlayLeg.Outcome.LOST
+            leg.save(update_fields=['outcome'])
+
+    for parlay_id in affected_parlay_ids:
+        _settle_parlay_if_ready(parlay_id)
+
+
 def settle_bet(bet: Bet, match_result: str):
     """Call inside an atomic block with a locked wallet."""
     if bet.status != Bet.Status.PENDING:
@@ -127,25 +296,27 @@ def refund_bet(bet: Bet):
 
 
 def settle_bets_for_match(match: Match):
-    """Settle all pending bets for a finished match."""
-    if match.status != Match.Status.FINISHED:
+    """Settle all pending bets and parlay legs for a finished/cancelled match."""
+    if match.status not in (Match.Status.FINISHED, Match.Status.CANCELLED):
         return
 
-    if match.home_score is None or match.away_score is None:
-        return
+    # Settle single bets
+    if match.status == Match.Status.FINISHED and match.home_score is not None and match.away_score is not None:
+        if match.home_score > match.away_score:
+            match_result = Bet.Selection.HOME
+        elif match.away_score > match.home_score:
+            match_result = Bet.Selection.AWAY
+        else:
+            match_result = Bet.Selection.DRAW
 
-    if match.home_score > match.away_score:
-        match_result = Bet.Selection.HOME
-    elif match.away_score > match.home_score:
-        match_result = Bet.Selection.AWAY
-    else:
-        match_result = Bet.Selection.DRAW
+        pending_bets = Bet.objects.select_for_update().filter(
+            match=match,
+            status=Bet.Status.PENDING,
+        )
 
-    pending_bets = Bet.objects.select_for_update().filter(
-        match=match,
-        status=Bet.Status.PENDING,
-    )
+        for bet in pending_bets:
+            with transaction.atomic():
+                settle_bet(bet, match_result)
 
-    for bet in pending_bets:
-        with transaction.atomic():
-            settle_bet(bet, match_result)
+    # Settle parlay legs
+    settle_parlays_for_match(match)
