@@ -1,13 +1,13 @@
 
 ## Main API Endpoints
 
-All API routes are under `/api/` and accept JSON.
+All API routes are prefixed with `/api/` and accept JSON.
 
 ### Auth
 - `POST /api/auth/register/`
 - `POST /api/auth/login/`
 - `POST /api/auth/refresh/`
-- `GET /api/auth/me/` — JWT protected
+- `GET /api/auth/me/` – JWT protected
 
 ### Wallet
 - `GET /api/wallet/`
@@ -19,21 +19,23 @@ All API routes are under `/api/` and accept JSON.
 - `GET /api/sports/`
 - `GET /api/matches/`
 - `GET /api/matches/{id}/`
-- `PATCH /api/matches/{id}/update-odds/` — admin/master
+- `PATCH /api/matches/{id}/update-odds/` – admin/master
 
 ### Bets
 - `POST /api/bets/place/`
 - `GET /api/bets/`
+- `POST /api/parlays/place/`
+- `GET /api/parlays/`
 
 ### Reports
-- `GET /api/reports/overview/` — admin/master
-- `GET /api/reports/daily/` — admin/master
+- `GET /api/reports/overview/` – admin/master
+- `GET /api/reports/daily/` – admin/master
 
 ### Audit
-- `GET /api/admin/audit-logs/` — admin/master
+- `GET /api/admin/audit-logs/` – admin/master
 
-### Payments (webhook for deposit confirmation)
-- `POST /api/payments/webhook/`
+### Payments
+- `POST /api/payments/webhook/` – deposit confirmation webhook
 
 ## Public Web Routes
 
@@ -43,18 +45,38 @@ All API routes are under `/api/` and accept JSON.
 | `/register/` | Create account |
 | `/login/` | Session login |
 | `/logout/` | Session logout |
-| `/matches/` | All matches list |
-| `/matches/{id}/` | Match detail + bet placement form |
-| `/wallet/` | View wallet, pending deposits, make deposit/withdraw |
-| `/bets/` | View user bet history |
+| `/password-reset/` | Request password reset |
+| `/password-reset/confirm/` | Complete password reset |
+| `/matches/` | All matches |
+| `/matches/{id}/` | Match detail + place a single bet |
+| `/parlay/` | Build a parlay bet |
+| `/parlays/` | Show parlay history |
+| `/wallet/` | View wallet, pending deposits, deposit / withdraw |
+| `/bets/` | Show single bet history |
+
+## Admin Web Routes (visible only to admins & masters)
+
+| Path | Purpose |
+|------|---------|
+| `/dashboard/` | Overview stats |
+| `/admin/reports/` | Daily reports |
+| `/admin/sports/` | Create sports and tournaments |
+| `/admin/matches/` | List matches |
+| `/admin/matches/create/` | Create a new match |
+| `/admin/matches/{id}/edit/` | Edit a match |
+| `/admin/matches/{id}/settle/` | Settle a match |
+| `/admin/matches/{id}/cancel/` | Cancel and refund a match |
+| `/admin/users/` | List users |
+| `/admin/users/{id}/edit/` | Update user role / limits / commission |
+| `/admin/audit/` | View audit logs |
 
 ## Environment
-Copy `backend/.env.example` to `backend/.env` for non‑Docker development.  
-Docker Compose already passes suitable defaults.
+Copy `backend/.env.example` to `backend/.env` for local development outside Docker.  
+Docker Compose already passes suitable defaults in `docker-compose.yml`.
 
-## Next Steps (see roadmap for details)
-- Integrate a real crypto gateway (NOWPayments adapter).
-- Add real odds provider with scheduled ingestion.
-- Add password reset email templates.
-- Build a custom admin dashboard (instead of relying on Django admin only).
-- Add more bet types and cash‑out.
+## Next Steps (see roadmap)
+- Integrate a real crypto gateway (NOWPayments adapter)
+- Add real odds provider feed with scheduled ingestion and automatic result marking
+- Replace development email console backend with an SMTP server
+- Implement more bet types / cash‑out
+- Expand security hardening and performance testing
