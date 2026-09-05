@@ -12,7 +12,7 @@ from datetime import timedelta
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
 
-from apps.accounts.models import User
+from apps.accounts.models import User, PasswordResetToken
 from apps.audit.models import AuditLog
 from apps.bets.models import Bet, ParlayBet
 from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
@@ -357,6 +357,78 @@ def login_view(request):
 def logout_view(request):
     auth_logout(request)
     return redirect('web:home')
+
+
+def password_reset_request_view(request):
+    if request.method == 'POST':
+        email = request.POST.get('email', '').strip()
+        try:
+            user = User.objects.get(email=email)
+            PasswordResetToken.objects.filter(
+                user=user,
+                is_used=False,
+            ).update(is_used=True)
+
+            import secrets
+            token = secrets.token_urlsafe(40)
+            PasswordResetToken.objects.create(user=user, token=token)
+
+            # For simplicity in this dev build, we display the token on the success page.
+            # In production you would send this via email.
+            return render(
+                request,
+                'web/reset_password_done.html',
+                {'token': token},
+            )
+        except User.DoesNotExist:
+            pass
+
+        return render(
+            request,
+            'web/reset_password_done.html',
+            {},
+        )
+
+    return render(request, 'web/reset_password.html')
+
+
+def password_reset_confirm_view(request):
+    if request.method == 'POST':
+        token = request.POST.get('token', '').strip()
+        new_password = request.POST.get('password1', '')
+        confirm_password = request.POST.get('password2', '')
+
+        error = None
+
+        if not token:
+            error = 'Token is required.'
+        elif new_password != confirm_password:
+            error = 'Passwords do not match.'
+        else:
+            try:
+                reset_obj = PasswordResetToken.objects.get(
+                    token=token,
+                    is_used=False,
+                )
+            except PasswordResetToken.DoesNotExist:
+                reset_obj = None
+                error = 'Invalid or expired reset token.'
+
+            if reset_obj is not None:
+                user = reset_obj.user
+                user.set_password(new_password)
+                user.save()
+                reset_obj.is_used = True
+                reset_obj.save()
+                return redirect('web:login')
+
+        return render(
+            request,
+            'web/reset_password_confirm.html',
+            {'error': error},
+        )
+
+    return render(request, 'web/reset_password_confirm.html')
 
 
 def matches_view(request):
