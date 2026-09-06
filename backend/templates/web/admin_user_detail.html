@@ -1,0 +1,144 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>{{ view_user.email }}</h1>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% else %}
+        <p>
+            <a class="btn" href="{% url 'web:admin_user_edit' view_user.id %}">Edit role / limits</a>
+            <a class="btn" href="{% url 'web:admin_users' %}">&larr; Back to all users</a>
+        </p>
+
+        <div class="stat-card">
+            <span>Role</span>
+            <strong>{{ view_user.role }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Joined</span>
+            <strong>{{ view_user.date_joined|date:"Y-m-d H:i" }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Phone number</span>
+            <strong>{{ view_user.phone_number|default:"&mdash;" }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Wallet balance</span>
+            <strong>{{ wallet.balance }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Parent</span>
+            <strong>{% if view_user.parent %}{{ view_user.parent.email }}{% else %}&mdash;{% endif %}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Commission rate</span>
+            <strong>{{ view_user.commission_rate|default:"0" }}%</strong>
+        </div>
+        <div class="stat-card">
+            <span>Betting enabled</span>
+            <strong>{{ view_user.is_betting_enabled|yesno:"Yes,No" }}</strong>
+        </div>
+
+        {% if children %}
+            <h3>Direct downstream users ({{ children|length }})</h3>
+            <table>
+                <thead><tr><th>Email</th><th>Role</th></tr></thead>
+                <tbody>
+                    {% for c in children %}
+                        <tr><td><a href="{% url 'web:admin_user_detail' c.id %}">{{ c.email }}</a></td><td>{{ c.role }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+
+        <h3>Wallet Transactions (last 100)</h3>
+        <table>
+            <thead>
+                <tr><th>Type</th><th>Amount</th><th>Status</th><th>Balance After</th><th>Date</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+                {% for txn in transactions %}
+                    <tr>
+                        <td>{{ txn.txn_type }}</td>
+                        <td>{{ txn.amount }}</td>
+                        <td>{{ txn.status }}</td>
+                        <td>{{ txn.balance_after }}</td>
+                        <td>{{ txn.created_at|date:"Y-m-d H:i" }}</td>
+                        <td>{{ txn.description|default:"" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="6">No wallet transactions yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Deposits &amp; Withdrawals (last 100)</h3>
+        <table>
+            <thead>
+                <tr><th>Type</th><th>Amount</th><th>Currency</th><th>Status</th><th>Provider</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+                {% for p in crypto_payments %}
+                    <tr>
+                        <td>{{ p.payment_type }}</td>
+                        <td>{{ p.amount }}</td>
+                        <td>{{ p.currency }}</td>
+                        <td>{{ p.status }}</td>
+                        <td>{{ p.provider }}</td>
+                        <td>{{ p.created_at|date:"Y-m-d H:i" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="6">No deposits/withdrawals yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Single Bets (last 100)</h3>
+        <table>
+            <thead>
+                <tr><th>Match</th><th>Selection</th><th>Odds</th><th>Stake</th><th>Potential Payout</th><th>Status</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+                {% for bet in bets %}
+                    <tr>
+                        <td>{{ bet.match.home_team }} v {{ bet.match.away_team }}</td>
+                        <td>{{ bet.selection }}</td>
+                        <td>{{ bet.odds }}</td>
+                        <td>{{ bet.stake }}</td>
+                        <td>{{ bet.potential_payout }}</td>
+                        <td>{{ bet.status }}</td>
+                        <td>{{ bet.created_at|date:"Y-m-d H:i" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="7">No bets yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Parlay Bets (last 50)</h3>
+        <table>
+            <thead>
+                <tr><th>Legs</th><th>Total Odds</th><th>Stake</th><th>Potential Payout</th><th>Status</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+                {% for parlay in parlays %}
+                    <tr>
+                        <td>
+                            {% for leg in parlay.legs.all %}
+                                {{ leg.match.home_team }} v {{ leg.match.away_team }} ({{ leg.selection }}, {{ leg.outcome }})<br>
+                            {% endfor %}
+                        </td>
+                        <td>{{ parlay.total_odds }}</td>
+                        <td>{{ parlay.stake }}</td>
+                        <td>{{ parlay.potential_payout }}</td>
+                        <td>{{ parlay.status }}</td>
+                        <td>{{ parlay.created_at|date:"Y-m-d H:i" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="6">No parlay bets yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endblock %}

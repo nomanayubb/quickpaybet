@@ -565,7 +565,7 @@ def admin_users_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
-    users_list = User.objects.select_related('parent').order_by('email')
+    users_list = User.objects.select_related('parent').order_by('-date_joined')
     if not _is_full_admin(request.user):
         # A master only manages/sees their own direct downstream users.
         users_list = users_list.filter(parent_id=request.user.id)
@@ -579,6 +579,48 @@ def admin_users_view(request):
         {
             'users': users,
             'page_obj': users,
+            'active': 'admin_users',
+        },
+    )
+
+
+def admin_user_detail_view(request, user_id):
+    """
+    Read-only full history for one user: profile, wallet, every deposit/
+    withdrawal, every bet and parlay bet. This is what an admin needs to
+    actually investigate a user, not just edit their role/limits.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    target = get_object_or_404(User.objects.select_related('parent'), pk=user_id)
+
+    if not user_can_manage_target(request.user, target):
+        return render(
+            request,
+            'web/admin_user_detail.html',
+            {'error': 'You cannot view this user.', 'view_user': target},
+            status=403,
+        )
+
+    wallet, _ = Wallet.objects.get_or_create(user=target)
+    transactions = WalletTransaction.objects.filter(wallet=wallet).select_related('wallet')[:100]
+    bets = Bet.objects.filter(user=target).select_related('match', 'match__sport').order_by('-created_at')[:100]
+    parlays = ParlayBet.objects.filter(user=target).prefetch_related('legs__match').order_by('-created_at')[:50]
+    deposits_withdrawals = CryptoPayment.objects.filter(user=target).order_by('-created_at')[:100]
+    children = User.objects.filter(parent=target).order_by('email')
+
+    return render(
+        request,
+        'web/admin_user_detail.html',
+        {
+            'view_user': target,
+            'wallet': wallet,
+            'transactions': transactions,
+            'bets': bets,
+            'parlays': parlays,
+            'crypto_payments': deposits_withdrawals,
+            'children': children,
             'active': 'admin_users',
         },
     )
@@ -613,8 +655,10 @@ def admin_user_update_view(request, user_id):
             max_bet_raw = request.POST.get('max_bet_amount', '').strip()
             commission_raw = request.POST.get('commission_rate', '').strip()
             is_betting_enabled = request.POST.get('is_betting_enabled') == 'on'
+            phone_number = request.POST.get('phone_number', '').strip()
 
             user.role = new_role
+            user.phone_number = phone_number
 
             if is_full_admin:
                 # Only a full admin may reassign which master/agent a user reports to.
@@ -706,6 +750,7 @@ def register_view(request):
             )
 
         email = request.POST.get('email', '').strip()
+        phone_number = request.POST.get('phone_number', '').strip()
         password = request.POST.get('password1', '')
         password2 = request.POST.get('password2', '')
 
@@ -728,7 +773,7 @@ def register_view(request):
                 {'error': 'User with this email already exists.'},
             )
 
-        user = User.objects.create_user(email=email, password=password)
+        user = User.objects.create_user(email=email, password=password, phone_number=phone_number)
         auth_login(request, user)
         return redirect('web:home')
 

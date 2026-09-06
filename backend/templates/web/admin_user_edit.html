@@ -10,6 +10,10 @@
     <form method="post">
         {% csrf_token %}
         <div class="form-group">
+            <label>Phone number</label>
+            <input type="tel" name="phone_number" value="{{ edit_user.phone_number|default:'' }}">
+        </div>
+        <div class="form-group">
             <label>Role</label>
             <select name="role">
                 {% if 'user' in allowed_roles %}<option value="user" {% if edit_user.role == 'user' %}selected{% endif %}>User</option>{% endif %}

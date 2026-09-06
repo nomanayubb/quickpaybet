@@ -15,7 +15,7 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'role', 'parent', 'commission_rate',
+            'id', 'email', 'phone_number', 'role', 'parent', 'commission_rate',
             'first_name', 'last_name',
             'min_bet_amount', 'max_bet_amount', 'is_betting_enabled', 'date_joined'
         )
@@ -31,10 +31,11 @@ class RegisterSerializer(serializers.ModelSerializer):
         validators=[validate_password]
     )
     password2 = serializers.CharField(write_only=True, required=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True, default='')
 
     class Meta:
         model = User
-        fields = ('email', 'password', 'password2', 'first_name', 'last_name')
+        fields = ('email', 'password', 'password2', 'first_name', 'last_name', 'phone_number')
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -52,7 +53,7 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'role', 'parent', 'commission_rate',
+            'id', 'email', 'phone_number', 'role', 'parent', 'commission_rate',
             'first_name', 'last_name',
             'min_bet_amount', 'max_bet_amount', 'is_betting_enabled'
         )
