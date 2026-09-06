@@ -17,6 +17,7 @@ from datetime import timedelta
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
 
+from apps.common.middleware import PAKISTAN_TZ
 from apps.accounts.models import User, PasswordResetToken
 from apps.accounts.permissions import roles_assignable_by, user_can_manage_target
 from apps.audit.models import AuditLog
@@ -621,7 +622,10 @@ def admin_users_view(request):
 
     first_bet_qs = Bet.objects.filter(user=OuterRef('pk')).order_by('created_at')
     last_bet_qs = Bet.objects.filter(user=OuterRef('pk')).order_by('-created_at')
-    today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Today" means the Pakistan calendar day, not the UTC one - midnight UTC
+    # and midnight PKT are 5 hours apart, so this must be computed in PKT
+    # explicitly rather than truncating timezone.now() (which is UTC).
+    today_start = timezone.now().astimezone(PAKISTAN_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
 
     users_list = User.objects.select_related('parent').annotate(
         first_bet_at=Subquery(first_bet_qs.values('created_at')[:1]),
@@ -647,14 +651,12 @@ def admin_users_view(request):
 
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
-    if date_from:
-        parsed = parse_datetime(date_from + ' 00:00:00') if len(date_from) == 10 else parse_datetime(date_from)
-        if parsed:
-            users_list = users_list.filter(date_joined__gte=parsed)
-    if date_to:
-        parsed = parse_datetime(date_to + ' 23:59:59') if len(date_to) == 10 else parse_datetime(date_to)
-        if parsed:
-            users_list = users_list.filter(date_joined__lte=parsed)
+    parsed_from = _parse_pkt_date_bound(date_from)
+    parsed_to = _parse_pkt_date_bound(date_to, end_of_day=True)
+    if parsed_from:
+        users_list = users_list.filter(date_joined__gte=parsed_from)
+    if parsed_to:
+        users_list = users_list.filter(date_joined__lte=parsed_to)
 
     active_ids = None
     filter_by = request.GET.get('filter', '').strip()
@@ -759,12 +761,34 @@ def admin_user_detail_view(request, user_id):
     )
 
 
-def _parse_date_bound(raw: str, end_of_day: bool = False):
+def _parse_pkt_date_bound(raw: str, end_of_day: bool = False):
+    """
+    Parses an admin-supplied date/time filter value and returns an
+    aware datetime, explicitly localized to Pakistan time (PKT) - never the
+    server's default timezone (UTC). All admin-facing date filters are
+    Pakistan time per an explicit requirement, and this must be done
+    explicitly: Django's ORM converts a naive datetime using
+    settings.TIME_ZONE (UTC), NOT whatever timezone is currently
+    `activate()`-d, even though the admin panel does activate PKT for
+    *display*. Confirmed by direct testing - relying on activation alone for
+    filtering silently produces UTC-shifted (wrong) results.
+
+    Accepts either a plain date (`YYYY-MM-DD`, from a <input type="date">)
+    or a full local datetime (`YYYY-MM-DDTHH:MM`, from
+    <input type="datetime-local">). `end_of_day` only applies to the
+    date-only form, to make an inclusive upper bound.
+    """
     if not raw:
         return None
-    suffix = ' 23:59:59' if end_of_day else ' 00:00:00'
-    text = raw + suffix if len(raw) == 10 else raw
-    return parse_datetime(text)
+    if len(raw) == 10:  # YYYY-MM-DD, no time component supplied
+        suffix = ' 23:59:59' if end_of_day else ' 00:00:00'
+        raw = raw + suffix
+    parsed = parse_datetime(raw)
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, PAKISTAN_TZ)
+    return parsed
 
 
 def admin_user_ledger_view(request, user_id):
@@ -796,8 +820,8 @@ def admin_user_ledger_view(request, user_id):
         bets_qs = bets_qs.filter(
             Q(match__home_team__icontains=bet_q) | Q(match__away_team__icontains=bet_q)
         )
-    bet_from_dt = _parse_date_bound(bet_date_from)
-    bet_to_dt = _parse_date_bound(bet_date_to, end_of_day=True)
+    bet_from_dt = _parse_pkt_date_bound(bet_date_from)
+    bet_to_dt = _parse_pkt_date_bound(bet_date_to, end_of_day=True)
     if bet_from_dt:
         bets_qs = bets_qs.filter(created_at__gte=bet_from_dt)
     if bet_to_dt:
@@ -820,8 +844,8 @@ def admin_user_ledger_view(request, user_id):
         payments_qs = payments_qs.filter(
             Q(external_id__icontains=pay_q) | Q(address__icontains=pay_q) | Q(currency__icontains=pay_q)
         )
-    pay_from_dt = _parse_date_bound(pay_date_from)
-    pay_to_dt = _parse_date_bound(pay_date_to, end_of_day=True)
+    pay_from_dt = _parse_pkt_date_bound(pay_date_from)
+    pay_to_dt = _parse_pkt_date_bound(pay_date_to, end_of_day=True)
     if pay_from_dt:
         payments_qs = payments_qs.filter(created_at__gte=pay_from_dt)
     if pay_to_dt:

@@ -104,5 +104,28 @@
         {% endif %}
         {% block content %}{% endblock %}
     </main>
+    <script>
+        // Detects the visitor's own timezone and stores it in a cookie so
+        // the server can render dates/times in it on later requests (see
+        // apps/common/middleware.py:TimezoneMiddleware). Only affects
+        // public/user-facing pages - the admin panel always shows Pakistan
+        // time regardless of this cookie. Reloads once, only the first time
+        // a visitor's browser doesn't have this cookie yet.
+        (function () {
+            function getCookie(name) {
+                var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+                return match ? match[2] : null;
+            }
+            if (!getCookie('user_tz')) {
+                try {
+                    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    if (tz) {
+                        document.cookie = 'user_tz=' + tz + ';path=/;max-age=31536000';
+                        location.reload();
+                    }
+                } catch (e) {}
+            }
+        })();
+    </script>
 </body>
 </html>

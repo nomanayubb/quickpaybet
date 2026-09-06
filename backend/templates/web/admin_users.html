@@ -25,8 +25,8 @@
             <option value="deposit_all_time" {% if sort_by == 'deposit_all_time' %}selected{% endif %}>Most deposited (all-time)</option>
             <option value="withdraw_all_time" {% if sort_by == 'withdraw_all_time' %}selected{% endif %}>Most withdrawn (all-time)</option>
         </select>
-        Joined from <input type="date" name="date_from" value="{{ date_from }}">
-        to <input type="date" name="date_to" value="{{ date_to }}">
+        Joined from <input type="datetime-local" name="date_from" value="{{ date_from }}">
+        to <input type="datetime-local" name="date_to" value="{{ date_to }}">
         <button type="submit" class="btn">Search</button>
         <a class="btn" href="{% url 'web:admin_users' %}">Reset</a>
     </form>
@@ -55,9 +55,9 @@
                         {% if u.id in active_ids %}🟢{% else %}⚪{% endif %}
                     </td>
                     <td>{{ u.email }}</td>
-                    <td style="font-size:11px;">{{ u.date_joined|date:"Y-m-d" }}</td>
-                    <td style="font-size:11px;">{{ u.first_bet_at|date:"Y-m-d"|default:"-" }}</td>
-                    <td style="font-size:11px;">{{ u.last_bet_at|date:"Y-m-d"|default:"-" }}</td>
+                    <td style="font-size:11px; white-space:nowrap;">{{ u.date_joined|date:"Y-m-d H:i" }}</td>
+                    <td style="font-size:11px; white-space:nowrap;">{{ u.first_bet_at|date:"Y-m-d H:i"|default:"-" }}</td>
+                    <td style="font-size:11px; white-space:nowrap;">{{ u.last_bet_at|date:"Y-m-d H:i"|default:"-" }}</td>
                     <td>{{ u.role }}</td>
                     <td>{% if u.parent %}{{ u.parent.email }}{% else %}-{% endif %}</td>
                     <td>{{ u.won_count }} / {{ u.lost_count }}</td>

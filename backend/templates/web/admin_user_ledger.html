@@ -10,8 +10,8 @@
         <input type="hidden" name="pay_date_from" value="{{ pay_date_from }}">
         <input type="hidden" name="pay_date_to" value="{{ pay_date_to }}">
         <input type="text" name="bet_q" value="{{ bet_q }}" placeholder="Search by team name">
-        From <input type="date" name="bet_date_from" value="{{ bet_date_from }}">
-        To <input type="date" name="bet_date_to" value="{{ bet_date_to }}">
+        From <input type="datetime-local" name="bet_date_from" value="{{ bet_date_from }}">
+        To <input type="datetime-local" name="bet_date_to" value="{{ bet_date_to }}">
         Show
         <select name="bet_page_size">
             <option value="10" {% if bet_page_size == 10 %}selected{% endif %}>10</option>
@@ -60,8 +60,8 @@
         <input type="hidden" name="bet_date_from" value="{{ bet_date_from }}">
         <input type="hidden" name="bet_date_to" value="{{ bet_date_to }}">
         <input type="text" name="pay_q" value="{{ pay_q }}" placeholder="Search by address / currency / ID">
-        From <input type="date" name="pay_date_from" value="{{ pay_date_from }}">
-        To <input type="date" name="pay_date_to" value="{{ pay_date_to }}">
+        From <input type="datetime-local" name="pay_date_from" value="{{ pay_date_from }}">
+        To <input type="datetime-local" name="pay_date_to" value="{{ pay_date_to }}">
         Show
         <select name="pay_page_size">
             <option value="10" {% if pay_page_size == 10 %}selected{% endif %}>10</option>
