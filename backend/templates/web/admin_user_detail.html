@@ -60,13 +60,19 @@
             </table>
         {% endif %}
 
-        <h3>Wallet Transactions (last 100)</h3>
+        <h3>Wallet Transactions</h3>
+        <form method="get" style="margin-bottom: 8px;">
+            <input type="text" name="wt_q" value="{{ wt_q }}" placeholder="Search type / description / reference">
+            From <input type="datetime-local" name="wt_date_from" value="{{ wt_date_from }}">
+            To <input type="datetime-local" name="wt_date_to" value="{{ wt_date_to }}">
+            <button type="submit" class="btn">Search</button>
+        </form>
         <table>
             <thead>
                 <tr><th>Type</th><th>Amount</th><th>Status</th><th>Balance After</th><th>Date</th><th>Description</th></tr>
             </thead>
             <tbody>
-                {% for txn in transactions %}
+                {% for txn in transactions_page %}
                     <tr>
                         <td>{{ txn.txn_type }}</td>
                         <td>{{ txn.amount }}</td>
@@ -76,18 +82,31 @@
                         <td>{{ txn.description|default:"" }}</td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="6">No wallet transactions yet.</td></tr>
+                    <tr><td colspan="6">No wallet transactions match this search.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
+        {% if transactions_page.has_previous or transactions_page.has_next %}
+            <div>
+                {% if transactions_page.has_previous %}<a class="btn" href="?wt_page={{ transactions_page.previous_page_number }}&wt_q={{ wt_q }}&wt_date_from={{ wt_date_from }}&wt_date_to={{ wt_date_to }}#wallet-transactions">Previous</a>{% endif %}
+                <span>Page {{ transactions_page.number }} of {{ transactions_page.paginator.num_pages }} ({{ transactions_page.paginator.count }} total)</span>
+                {% if transactions_page.has_next %}<a class="btn" href="?wt_page={{ transactions_page.next_page_number }}&wt_q={{ wt_q }}&wt_date_from={{ wt_date_from }}&wt_date_to={{ wt_date_to }}#wallet-transactions">Next</a>{% endif %}
+            </div>
+        {% endif %}
 
-        <h3>Deposits &amp; Withdrawals (last 100)</h3>
+        <h3 style="margin-top:24px;">Deposits &amp; Withdrawals</h3>
+        <form method="get" style="margin-bottom: 8px;">
+            <input type="text" name="cp_q" value="{{ cp_q }}" placeholder="Search address / currency / ID">
+            From <input type="datetime-local" name="cp_date_from" value="{{ cp_date_from }}">
+            To <input type="datetime-local" name="cp_date_to" value="{{ cp_date_to }}">
+            <button type="submit" class="btn">Search</button>
+        </form>
         <table>
             <thead>
                 <tr><th>Type</th><th>Amount</th><th>Currency</th><th>Status</th><th>Provider</th><th>Date</th></tr>
             </thead>
             <tbody>
-                {% for p in crypto_payments %}
+                {% for p in payments_page %}
                     <tr>
                         <td>{{ p.payment_type }}</td>
                         <td>{{ p.amount }}</td>
@@ -97,20 +116,33 @@
                         <td>{{ p.created_at|date:"Y-m-d H:i" }}</td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="6">No deposits/withdrawals yet.</td></tr>
+                    <tr><td colspan="6">No deposits/withdrawals match this search.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
+        {% if payments_page.has_previous or payments_page.has_next %}
+            <div>
+                {% if payments_page.has_previous %}<a class="btn" href="?cp_page={{ payments_page.previous_page_number }}&cp_q={{ cp_q }}&cp_date_from={{ cp_date_from }}&cp_date_to={{ cp_date_to }}">Previous</a>{% endif %}
+                <span>Page {{ payments_page.number }} of {{ payments_page.paginator.num_pages }} ({{ payments_page.paginator.count }} total)</span>
+                {% if payments_page.has_next %}<a class="btn" href="?cp_page={{ payments_page.next_page_number }}&cp_q={{ cp_q }}&cp_date_from={{ cp_date_from }}&cp_date_to={{ cp_date_to }}">Next</a>{% endif %}
+            </div>
+        {% endif %}
 
-        <h3>Single Bets (last 100)</h3>
+        <h3 style="margin-top:24px;">Single Bets</h3>
+        <form method="get" style="margin-bottom: 8px;">
+            <input type="text" name="sb_q" value="{{ sb_q }}" placeholder="Search by team name">
+            From <input type="datetime-local" name="sb_date_from" value="{{ sb_date_from }}">
+            To <input type="datetime-local" name="sb_date_to" value="{{ sb_date_to }}">
+            <button type="submit" class="btn">Search</button>
+        </form>
         <table>
             <thead>
                 <tr><th>Match</th><th>Selection</th><th>Odds</th><th>Stake</th><th>Potential Payout</th><th>Status</th><th>Date</th></tr>
             </thead>
             <tbody>
-                {% for bet in bets %}
+                {% for bet in bets_page %}
                     <tr>
-                        <td>{{ bet.match.home_team }} v {{ bet.match.away_team }}</td>
+                        <td><a href="{% url 'web:admin_bet_detail' bet.id %}">{{ bet.match.home_team }} v {{ bet.match.away_team }}</a></td>
                         <td>{{ bet.selection }}</td>
                         <td>{{ bet.odds }}</td>
                         <td>{{ bet.stake }}</td>
@@ -119,18 +151,31 @@
                         <td>{{ bet.created_at|date:"Y-m-d H:i" }}</td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="7">No bets yet.</td></tr>
+                    <tr><td colspan="7">No bets match this search.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
+        {% if bets_page.has_previous or bets_page.has_next %}
+            <div>
+                {% if bets_page.has_previous %}<a class="btn" href="?sb_page={{ bets_page.previous_page_number }}&sb_q={{ sb_q }}&sb_date_from={{ sb_date_from }}&sb_date_to={{ sb_date_to }}">Previous</a>{% endif %}
+                <span>Page {{ bets_page.number }} of {{ bets_page.paginator.num_pages }} ({{ bets_page.paginator.count }} total)</span>
+                {% if bets_page.has_next %}<a class="btn" href="?sb_page={{ bets_page.next_page_number }}&sb_q={{ sb_q }}&sb_date_from={{ sb_date_from }}&sb_date_to={{ sb_date_to }}">Next</a>{% endif %}
+            </div>
+        {% endif %}
 
-        <h3>Parlay Bets (last 50)</h3>
+        <h3 style="margin-top:24px;">Parlay Bets</h3>
+        <form method="get" style="margin-bottom: 8px;">
+            <input type="text" name="pb_q" value="{{ pb_q }}" placeholder="Search by team name">
+            From <input type="datetime-local" name="pb_date_from" value="{{ pb_date_from }}">
+            To <input type="datetime-local" name="pb_date_to" value="{{ pb_date_to }}">
+            <button type="submit" class="btn">Search</button>
+        </form>
         <table>
             <thead>
                 <tr><th>Legs</th><th>Total Odds</th><th>Stake</th><th>Potential Payout</th><th>Status</th><th>Date</th></tr>
             </thead>
             <tbody>
-                {% for parlay in parlays %}
+                {% for parlay in parlays_page %}
                     <tr>
                         <td>
                             {% for leg in parlay.legs.all %}
@@ -144,9 +189,16 @@
                         <td>{{ parlay.created_at|date:"Y-m-d H:i" }}</td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="6">No parlay bets yet.</td></tr>
+                    <tr><td colspan="6">No parlay bets match this search.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
+        {% if parlays_page.has_previous or parlays_page.has_next %}
+            <div>
+                {% if parlays_page.has_previous %}<a class="btn" href="?pb_page={{ parlays_page.previous_page_number }}&pb_q={{ pb_q }}&pb_date_from={{ pb_date_from }}&pb_date_to={{ pb_date_to }}">Previous</a>{% endif %}
+                <span>Page {{ parlays_page.number }} of {{ parlays_page.paginator.num_pages }} ({{ parlays_page.paginator.count }} total)</span>
+                {% if parlays_page.has_next %}<a class="btn" href="?pb_page={{ parlays_page.next_page_number }}&pb_q={{ pb_q }}&pb_date_from={{ pb_date_from }}&pb_date_to={{ pb_date_to }}">Next</a>{% endif %}
+            </div>
+        {% endif %}
     {% endif %}
 {% endblock %}

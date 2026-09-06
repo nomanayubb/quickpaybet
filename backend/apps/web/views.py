@@ -720,7 +720,15 @@ def admin_user_detail_view(request, user_id):
     Read-only full history for one user: profile, wallet, every deposit/
     withdrawal, every bet and parlay bet. This is what an admin needs to
     actually investigate a user, not just edit their role/limits.
+
+    Each of the four history boxes (wallet transactions, deposits/
+    withdrawals, single bets, parlay bets) has its own independent search
+    box, date range (Pakistan time, like every other admin filter), and
+    pagination - prefixed wt_/cp_/sb_/pb_ respectively so they never
+    collide with each other's query params on one page.
     """
+    from django.db.models import Q
+
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
@@ -735,10 +743,62 @@ def admin_user_detail_view(request, user_id):
         )
 
     wallet, _ = Wallet.objects.get_or_create(user=target)
-    transactions = WalletTransaction.objects.filter(wallet=wallet).select_related('wallet')[:100]
-    bets = Bet.objects.filter(user=target).select_related('match', 'match__sport').order_by('-created_at')[:100]
-    parlays = ParlayBet.objects.filter(user=target).prefetch_related('legs__match').order_by('-created_at')[:50]
-    deposits_withdrawals = CryptoPayment.objects.filter(user=target).order_by('-created_at')[:100]
+
+    def date_filtered(qs, field, prefix):
+        q_from = request.GET.get(f'{prefix}_date_from', '').strip()
+        q_to = request.GET.get(f'{prefix}_date_to', '').strip()
+        dt_from = _parse_pkt_date_bound(q_from)
+        dt_to = _parse_pkt_date_bound(q_to, end_of_day=True)
+        if dt_from:
+            qs = qs.filter(**{f'{field}__gte': dt_from})
+        if dt_to:
+            qs = qs.filter(**{f'{field}__lte': dt_to})
+        return qs, q_from, q_to
+
+    def paginated(qs, prefix, page_size=25):
+        paginator = Paginator(qs, page_size)
+        return paginator.get_page(request.GET.get(f'{prefix}_page'))
+
+    # --- Wallet transactions ---
+    wt_q = request.GET.get('wt_q', '').strip()
+    transactions_qs = WalletTransaction.objects.filter(wallet=wallet).select_related('wallet').order_by('-created_at')
+    if wt_q:
+        transactions_qs = transactions_qs.filter(
+            Q(txn_type__icontains=wt_q) | Q(description__icontains=wt_q) | Q(reference_id__icontains=wt_q)
+        )
+    transactions_qs, wt_date_from, wt_date_to = date_filtered(transactions_qs, 'created_at', 'wt')
+    transactions_page = paginated(transactions_qs, 'wt')
+
+    # --- Deposits / withdrawals ---
+    cp_q = request.GET.get('cp_q', '').strip()
+    payments_qs = CryptoPayment.objects.filter(user=target).order_by('-created_at')
+    if cp_q:
+        payments_qs = payments_qs.filter(
+            Q(external_id__icontains=cp_q) | Q(address__icontains=cp_q) | Q(currency__icontains=cp_q)
+        )
+    payments_qs, cp_date_from, cp_date_to = date_filtered(payments_qs, 'created_at', 'cp')
+    payments_page = paginated(payments_qs, 'cp')
+
+    # --- Single bets ---
+    sb_q = request.GET.get('sb_q', '').strip()
+    bets_qs = Bet.objects.filter(user=target).select_related('match', 'match__sport').order_by('-created_at')
+    if sb_q:
+        bets_qs = bets_qs.filter(
+            Q(match__home_team__icontains=sb_q) | Q(match__away_team__icontains=sb_q)
+        )
+    bets_qs, sb_date_from, sb_date_to = date_filtered(bets_qs, 'created_at', 'sb')
+    bets_page = paginated(bets_qs, 'sb')
+
+    # --- Parlay bets ---
+    pb_q = request.GET.get('pb_q', '').strip()
+    parlays_qs = ParlayBet.objects.filter(user=target).prefetch_related('legs__match').order_by('-created_at')
+    if pb_q:
+        parlays_qs = parlays_qs.filter(
+            Q(legs__match__home_team__icontains=pb_q) | Q(legs__match__away_team__icontains=pb_q)
+        ).distinct()
+    parlays_qs, pb_date_from, pb_date_to = date_filtered(parlays_qs, 'created_at', 'pb')
+    parlays_page = paginated(parlays_qs, 'pb')
+
     children = User.objects.filter(parent=target).order_by('email')
 
     return render(
@@ -747,10 +807,14 @@ def admin_user_detail_view(request, user_id):
         {
             'view_user': target,
             'wallet': wallet,
-            'transactions': transactions,
-            'bets': bets,
-            'parlays': parlays,
-            'crypto_payments': deposits_withdrawals,
+            'transactions_page': transactions_page,
+            'wt_q': wt_q, 'wt_date_from': wt_date_from, 'wt_date_to': wt_date_to,
+            'payments_page': payments_page,
+            'cp_q': cp_q, 'cp_date_from': cp_date_from, 'cp_date_to': cp_date_to,
+            'bets_page': bets_page,
+            'sb_q': sb_q, 'sb_date_from': sb_date_from, 'sb_date_to': sb_date_to,
+            'parlays_page': parlays_page,
+            'pb_q': pb_q, 'pb_date_from': pb_date_from, 'pb_date_to': pb_date_to,
             'children': children,
             # Phone number is personal contact info - only the actual
             # superuser (the platform owner) sees it, not every "admin"
