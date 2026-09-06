@@ -561,14 +561,137 @@ def admin_audit_logs_view(request):
     )
 
 
+def _currently_signed_in_user_ids():
+    """
+    "Online now" for a session-based Django app means: has a session that
+    hasn't expired yet. There is no separate heartbeat/presence system, so
+    this is the correct, honest definition (not an approximation) - a user
+    is counted as signed in exactly as long as their login session is valid,
+    which matches how being "logged in" actually works here.
+    """
+    from django.contrib.sessions.models import Session
+
+    ids = set()
+    for session in Session.objects.filter(expire_date__gte=timezone.now()).iterator():
+        data = session.get_decoded()
+        uid = data.get('_auth_user_id')
+        if uid:
+            ids.add(int(uid))
+    return ids
+
+
 def admin_users_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
-    users_list = User.objects.select_related('parent').order_by('-date_joined')
+    from django.db.models import Count, OuterRef, Subquery, Sum
+    from django.db.models.functions import Coalesce
+
+    # Every per-user number below is a correlated subquery, not a joined
+    # aggregate. Combining Count()/Sum() annotations over TWO different
+    # reverse relations (bets AND crypto_payments) in one annotate() call
+    # makes Django JOIN both tables together, which silently inflates every
+    # aggregate via row fan-out (each bet row gets multiplied by each
+    # payment row, and vice versa) - a real, easy-to-miss correctness bug.
+    # Subqueries are each independently correlated per outer row, so this
+    # can't happen. Verified against known test data before relying on this.
+    def bet_count_subquery(status):
+        return Coalesce(
+            Subquery(
+                Bet.objects.filter(user=OuterRef('pk'), status=status)
+                .order_by().values('user').annotate(c=Count('id')).values('c')[:1]
+            ),
+            0,
+        )
+
+    def payment_sum_subquery(payment_type, since=None):
+        qs = CryptoPayment.objects.filter(
+            user=OuterRef('pk'),
+            payment_type=payment_type,
+            status=CryptoPayment.Status.COMPLETED,
+        )
+        if since is not None:
+            qs = qs.filter(created_at__gte=since)
+        return Coalesce(
+            Subquery(
+                qs.order_by().values('user').annotate(s=Sum('amount')).values('s')[:1]
+            ),
+            Decimal('0'),
+        )
+
+    first_bet_qs = Bet.objects.filter(user=OuterRef('pk')).order_by('created_at')
+    last_bet_qs = Bet.objects.filter(user=OuterRef('pk')).order_by('-created_at')
+    today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    users_list = User.objects.select_related('parent').annotate(
+        first_bet_at=Subquery(first_bet_qs.values('created_at')[:1]),
+        last_bet_at=Subquery(last_bet_qs.values('created_at')[:1]),
+        first_bet_status=Subquery(first_bet_qs.values('status')[:1]),
+        last_bet_status=Subquery(last_bet_qs.values('status')[:1]),
+        won_count=bet_count_subquery(Bet.Status.WON),
+        lost_count=bet_count_subquery(Bet.Status.LOST),
+        pending_count=bet_count_subquery(Bet.Status.PENDING),
+        deposit_today=payment_sum_subquery(CryptoPayment.PaymentType.DEPOSIT, since=today_start),
+        withdraw_today=payment_sum_subquery(CryptoPayment.PaymentType.WITHDRAWAL, since=today_start),
+        deposit_all_time=payment_sum_subquery(CryptoPayment.PaymentType.DEPOSIT),
+        withdraw_all_time=payment_sum_subquery(CryptoPayment.PaymentType.WITHDRAWAL),
+    )
+
     if not _is_full_admin(request.user):
         # A master only manages/sees their own direct downstream users.
         users_list = users_list.filter(parent_id=request.user.id)
+
+    query = request.GET.get('q', '').strip()
+    if query:
+        users_list = users_list.filter(email__icontains=query)
+
+    date_from = request.GET.get('date_from', '').strip()
+    date_to = request.GET.get('date_to', '').strip()
+    if date_from:
+        parsed = parse_datetime(date_from + ' 00:00:00') if len(date_from) == 10 else parse_datetime(date_from)
+        if parsed:
+            users_list = users_list.filter(date_joined__gte=parsed)
+    if date_to:
+        parsed = parse_datetime(date_to + ' 23:59:59') if len(date_to) == 10 else parse_datetime(date_to)
+        if parsed:
+            users_list = users_list.filter(date_joined__lte=parsed)
+
+    active_ids = None
+    filter_by = request.GET.get('filter', '').strip()
+    if filter_by == 'online':
+        active_ids = _currently_signed_in_user_ids()
+        users_list = users_list.filter(pk__in=active_ids)
+    elif filter_by == 'has_pending_bet':
+        users_list = users_list.filter(pending_count__gt=0)
+    elif filter_by == 'first_bet_won':
+        users_list = users_list.filter(first_bet_status=Bet.Status.WON)
+    elif filter_by == 'first_bet_lost':
+        users_list = users_list.filter(first_bet_status=Bet.Status.LOST)
+    elif filter_by == 'last_bet_won':
+        users_list = users_list.filter(last_bet_status=Bet.Status.WON)
+    elif filter_by == 'last_bet_lost':
+        users_list = users_list.filter(last_bet_status=Bet.Status.LOST)
+
+    sort_by = request.GET.get('sort', 'joined').strip()
+    sort_map = {
+        'joined': '-date_joined',
+        'first_bet': '-first_bet_at',
+        'last_bet': '-last_bet_at',
+        'most_wins': '-won_count',
+        'most_losses': '-lost_count',
+        'deposit_today': '-deposit_today',
+        'withdraw_today': '-withdraw_today',
+        'deposit_all_time': '-deposit_all_time',
+        'withdraw_all_time': '-withdraw_all_time',
+    }
+    users_list = users_list.order_by(sort_map.get(sort_by, '-date_joined'), 'id')
+
+    if active_ids is None and filter_by != 'online':
+        # Only compute this once, and only when needed for display (the
+        # small "online" dot next to each row), not when we already
+        # filtered by it above.
+        active_ids = _currently_signed_in_user_ids()
+
     paginator = Paginator(users_list, 20)
     page_number = request.GET.get('page')
     users = paginator.get_page(page_number)
@@ -579,6 +702,12 @@ def admin_users_view(request):
         {
             'users': users,
             'page_obj': users,
+            'active_ids': active_ids,
+            'query': query,
+            'date_from': date_from,
+            'date_to': date_to,
+            'filter_by': filter_by,
+            'sort_by': sort_by,
             'active': 'admin_users',
         },
     )
@@ -624,7 +753,175 @@ def admin_user_detail_view(request, user_id):
             # Phone number is personal contact info - only the actual
             # superuser (the platform owner) sees it, not every "admin"
             # role staff account.
-            'can_view_sensitive': request.user.is_superuser,
+            'can_view_sensitive': _is_full_admin(request.user),
+            'active': 'admin_users',
+        },
+    )
+
+
+def _parse_date_bound(raw: str, end_of_day: bool = False):
+    if not raw:
+        return None
+    suffix = ' 23:59:59' if end_of_day else ' 00:00:00'
+    text = raw + suffix if len(raw) == 10 else raw
+    return parse_datetime(text)
+
+
+def admin_user_ledger_view(request, user_id):
+    """
+    Full betting + deposit/withdrawal ledger for one user: two independent
+    sections (bet history, deposit/withdrawal history), each with its own
+    search box, date range, and adjustable page size, plus a CSV export of
+    whatever is currently filtered (not limited to the on-screen page size -
+    the on-screen table stays capped so the page can't be made to render
+    10,000 rows and hang the browser; the CSV export has no such cap since
+    it's a file download, not rendered HTML).
+    """
+    from django.db.models import Q
+
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    target = get_object_or_404(User, pk=user_id)
+    if not user_can_manage_target(request.user, target):
+        return redirect('web:admin_users')
+
+    # --- Bet history ---
+    bet_q = request.GET.get('bet_q', '').strip()
+    bet_date_from = request.GET.get('bet_date_from', '').strip()
+    bet_date_to = request.GET.get('bet_date_to', '').strip()
+
+    bets_qs = Bet.objects.filter(user=target).select_related('match', 'match__sport').order_by('-created_at')
+    if bet_q:
+        bets_qs = bets_qs.filter(
+            Q(match__home_team__icontains=bet_q) | Q(match__away_team__icontains=bet_q)
+        )
+    bet_from_dt = _parse_date_bound(bet_date_from)
+    bet_to_dt = _parse_date_bound(bet_date_to, end_of_day=True)
+    if bet_from_dt:
+        bets_qs = bets_qs.filter(created_at__gte=bet_from_dt)
+    if bet_to_dt:
+        bets_qs = bets_qs.filter(created_at__lte=bet_to_dt)
+
+    if request.GET.get('export') == 'bets_csv':
+        return _export_bets_csv(target, bets_qs)
+
+    bet_page_size = _clamp_page_size(request.GET.get('bet_page_size'), default=50)
+    bet_paginator = Paginator(bets_qs, bet_page_size)
+    bets_page = bet_paginator.get_page(request.GET.get('bet_page'))
+
+    # --- Deposit / withdrawal history ---
+    pay_q = request.GET.get('pay_q', '').strip()
+    pay_date_from = request.GET.get('pay_date_from', '').strip()
+    pay_date_to = request.GET.get('pay_date_to', '').strip()
+
+    payments_qs = CryptoPayment.objects.filter(user=target).order_by('-created_at')
+    if pay_q:
+        payments_qs = payments_qs.filter(
+            Q(external_id__icontains=pay_q) | Q(address__icontains=pay_q) | Q(currency__icontains=pay_q)
+        )
+    pay_from_dt = _parse_date_bound(pay_date_from)
+    pay_to_dt = _parse_date_bound(pay_date_to, end_of_day=True)
+    if pay_from_dt:
+        payments_qs = payments_qs.filter(created_at__gte=pay_from_dt)
+    if pay_to_dt:
+        payments_qs = payments_qs.filter(created_at__lte=pay_to_dt)
+
+    if request.GET.get('export') == 'payments_csv':
+        return _export_payments_csv(target, payments_qs)
+
+    pay_page_size = _clamp_page_size(request.GET.get('pay_page_size'), default=50)
+    pay_paginator = Paginator(payments_qs, pay_page_size)
+    payments_page = pay_paginator.get_page(request.GET.get('pay_page'))
+
+    return render(
+        request,
+        'web/admin_user_ledger.html',
+        {
+            'view_user': target,
+            'bets_page': bets_page,
+            'bet_q': bet_q,
+            'bet_date_from': bet_date_from,
+            'bet_date_to': bet_date_to,
+            'bet_page_size': bet_page_size,
+            'payments_page': payments_page,
+            'pay_q': pay_q,
+            'pay_date_from': pay_date_from,
+            'pay_date_to': pay_date_to,
+            'pay_page_size': pay_page_size,
+            'active': 'admin_users',
+        },
+    )
+
+
+def _clamp_page_size(raw, default=50, minimum=10, maximum=10000):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def _export_bets_csv(target, bets_qs):
+    import csv
+    from django.http import HttpResponse
+
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{target.email}_bets.csv"'
+    writer = csv.writer(response)
+    writer.writerow(['Date', 'Match', 'Selection', 'Odds', 'Stake', 'Potential Payout', 'Status'])
+    for bet in bets_qs.iterator():
+        writer.writerow([
+            bet.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            f'{bet.match.home_team} v {bet.match.away_team}',
+            bet.selection,
+            bet.odds,
+            bet.stake,
+            bet.potential_payout,
+            bet.status,
+        ])
+    return response
+
+
+def _export_payments_csv(target, payments_qs):
+    import csv
+    from django.http import HttpResponse
+
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{target.email}_payments.csv"'
+    writer = csv.writer(response)
+    writer.writerow(['Date', 'Type', 'Amount', 'Currency', 'Status', 'Provider', 'Address', 'External ID'])
+    for p in payments_qs.iterator():
+        writer.writerow([
+            p.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            p.payment_type,
+            p.amount,
+            p.currency,
+            p.status,
+            p.provider,
+            p.address,
+            p.external_id,
+        ])
+    return response
+
+
+def admin_bet_detail_view(request, bet_id):
+    """One bet's full detail, plus how many times this user has bet on this match."""
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    bet = get_object_or_404(Bet.objects.select_related('match', 'match__sport', 'user'), pk=bet_id)
+    if not user_can_manage_target(request.user, bet.user):
+        return redirect('web:admin_users')
+
+    times_bet_on_match = Bet.objects.filter(user=bet.user, match=bet.match).count()
+
+    return render(
+        request,
+        'web/admin_bet_detail.html',
+        {
+            'bet': bet,
+            'times_bet_on_match': times_bet_on_match,
             'active': 'admin_users',
         },
     )
@@ -638,7 +935,7 @@ def admin_reset_user_password_view(request, user_id):
     recoverable by anyone - this creates a new one instead, which is the
     safe way to solve "user forgot their password and can't do email reset".
     """
-    if not request.user.is_superuser:
+    if not _is_full_admin(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
     if request.method != 'POST':
@@ -699,7 +996,7 @@ def admin_user_update_view(request, user_id):
             is_betting_enabled = request.POST.get('is_betting_enabled') == 'on'
 
             user.role = new_role
-            if request.user.is_superuser:
+            if _is_full_admin(request.user):
                 # Phone number is personal contact info - only the actual
                 # superuser (platform owner) may view/edit it.
                 user.phone_number = request.POST.get('phone_number', '').strip()
@@ -762,7 +1059,7 @@ def admin_user_update_view(request, user_id):
                     'possible_parents': possible_parents,
                     'allowed_roles': allowed_roles,
                     'can_edit_parent': is_full_admin,
-                    'can_view_sensitive': request.user.is_superuser,
+                    'can_view_sensitive': _is_full_admin(request.user),
                 },
             )
 
@@ -774,7 +1071,7 @@ def admin_user_update_view(request, user_id):
             'possible_parents': possible_parents,
             'allowed_roles': allowed_roles,
             'can_edit_parent': is_full_admin,
-            'can_view_sensitive': request.user.is_superuser,
+            'can_view_sensitive': _is_full_admin(request.user),
         },
     )
 

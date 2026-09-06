@@ -1,17 +1,49 @@
 {% extends 'web/base.html' %}
 
 {% block content %}
-    <h1>All Users</h1>
+    <h1>Users</h1>
+
+    <form method="get" style="margin-bottom: 16px;">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search by email">
+        <select name="filter">
+            <option value="">All users</option>
+            <option value="online" {% if filter_by == 'online' %}selected{% endif %}>Currently signed in</option>
+            <option value="has_pending_bet" {% if filter_by == 'has_pending_bet' %}selected{% endif %}>Has a pending bet</option>
+            <option value="first_bet_won" {% if filter_by == 'first_bet_won' %}selected{% endif %}>Won their first bet</option>
+            <option value="first_bet_lost" {% if filter_by == 'first_bet_lost' %}selected{% endif %}>Lost their first bet</option>
+            <option value="last_bet_won" {% if filter_by == 'last_bet_won' %}selected{% endif %}>Won their most recent bet</option>
+            <option value="last_bet_lost" {% if filter_by == 'last_bet_lost' %}selected{% endif %}>Lost their most recent bet</option>
+        </select>
+        <select name="sort">
+            <option value="joined" {% if sort_by == 'joined' %}selected{% endif %}>Newest account first</option>
+            <option value="first_bet" {% if sort_by == 'first_bet' %}selected{% endif %}>Most recent first bet</option>
+            <option value="last_bet" {% if sort_by == 'last_bet' %}selected{% endif %}>Most recent last bet</option>
+            <option value="most_wins" {% if sort_by == 'most_wins' %}selected{% endif %}>Most wins (all-time)</option>
+            <option value="most_losses" {% if sort_by == 'most_losses' %}selected{% endif %}>Most losses (all-time)</option>
+            <option value="deposit_today" {% if sort_by == 'deposit_today' %}selected{% endif %}>Most deposited today</option>
+            <option value="withdraw_today" {% if sort_by == 'withdraw_today' %}selected{% endif %}>Most withdrawn today</option>
+            <option value="deposit_all_time" {% if sort_by == 'deposit_all_time' %}selected{% endif %}>Most deposited (all-time)</option>
+            <option value="withdraw_all_time" {% if sort_by == 'withdraw_all_time' %}selected{% endif %}>Most withdrawn (all-time)</option>
+        </select>
+        Joined from <input type="date" name="date_from" value="{{ date_from }}">
+        to <input type="date" name="date_to" value="{{ date_to }}">
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_users' %}">Reset</a>
+    </form>
+
     <table>
         <thead>
             <tr>
+                <th></th>
                 <th>Email</th>
-                <th>Joined</th>
+                <th title="Account Created">AC</th>
+                <th title="First Bet">FB</th>
+                <th title="Last Bet">LB</th>
                 <th>Role</th>
                 <th>Parent</th>
-                <th>Commission</th>
-                <th>Min Bet</th>
-                <th>Max Bet</th>
+                <th>W / L</th>
+                <th title="Deposited today">Dep. today</th>
+                <th title="Withdrawn today">W/D today</th>
                 <th>Betting Enabled</th>
                 <th></th>
             </tr>
@@ -19,21 +51,27 @@
         <tbody>
             {% for u in users %}
                 <tr>
+                    <td title="{% if u.id in active_ids %}Currently signed in{% else %}Not currently signed in{% endif %}">
+                        {% if u.id in active_ids %}🟢{% else %}⚪{% endif %}
+                    </td>
                     <td>{{ u.email }}</td>
-                    <td>{{ u.date_joined|date:"Y-m-d H:i" }}</td>
+                    <td style="font-size:11px;">{{ u.date_joined|date:"Y-m-d" }}</td>
+                    <td style="font-size:11px;">{{ u.first_bet_at|date:"Y-m-d"|default:"-" }}</td>
+                    <td style="font-size:11px;">{{ u.last_bet_at|date:"Y-m-d"|default:"-" }}</td>
                     <td>{{ u.role }}</td>
                     <td>{% if u.parent %}{{ u.parent.email }}{% else %}-{% endif %}</td>
-                    <td>{{ u.commission_rate|default:"0" }}%</td>
-                    <td>{{ u.min_bet_amount|default:"-" }}</td>
-                    <td>{{ u.max_bet_amount|default:"-" }}</td>
+                    <td>{{ u.won_count }} / {{ u.lost_count }}</td>
+                    <td>{{ u.deposit_today }}</td>
+                    <td>{{ u.withdraw_today }}</td>
                     <td>{{ u.is_betting_enabled|yesno:"Yes,No" }}</td>
                     <td>
-                        <a class="btn" href="{% url 'web:admin_user_detail' u.id %}">View</a>
+                        <a class="btn" href="{% url 'web:admin_user_detail' u.id %}" title="Information">ℹ️ Info</a>
+                        <a class="btn" href="{% url 'web:admin_user_ledger' u.id %}" title="Betting ledger">📒 Ledger</a>
                         <a class="btn" href="{% url 'web:admin_user_edit' u.id %}">Edit</a>
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="9">No users yet.</td></tr>
+                <tr><td colspan="12">No users match this search.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -41,11 +79,11 @@
     {% if page_obj.has_previous or page_obj.has_next %}
         <div style="margin-top: 20px;">
             {% if page_obj.has_previous %}
-                <a class="btn" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                <a class="btn" href="?page={{ page_obj.previous_page_number }}&q={{ query }}&filter={{ filter_by }}&sort={{ sort_by }}&date_from={{ date_from }}&date_to={{ date_to }}">Previous</a>
             {% endif %}
             <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
             {% if page_obj.has_next %}
-                <a class="btn" href="?page={{ page_obj.next_page_number }}">Next</a>
+                <a class="btn" href="?page={{ page_obj.next_page_number }}&q={{ query }}&filter={{ filter_by }}&sort={{ sort_by }}&date_from={{ date_from }}&date_to={{ date_to }}">Next</a>
             {% endif %}
         </div>
     {% endif %}

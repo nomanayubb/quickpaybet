@@ -1,0 +1,106 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Ledger — {{ view_user.email }}</h1>
+    <p><a href="{% url 'web:admin_user_detail' view_user.id %}">&larr; Back to {{ view_user.email }}</a></p>
+
+    <h2>Bet History</h2>
+    <form method="get" style="margin-bottom: 12px;">
+        <input type="hidden" name="pay_q" value="{{ pay_q }}">
+        <input type="hidden" name="pay_date_from" value="{{ pay_date_from }}">
+        <input type="hidden" name="pay_date_to" value="{{ pay_date_to }}">
+        <input type="text" name="bet_q" value="{{ bet_q }}" placeholder="Search by team name">
+        From <input type="date" name="bet_date_from" value="{{ bet_date_from }}">
+        To <input type="date" name="bet_date_to" value="{{ bet_date_to }}">
+        Show
+        <select name="bet_page_size">
+            <option value="10" {% if bet_page_size == 10 %}selected{% endif %}>10</option>
+            <option value="50" {% if bet_page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if bet_page_size == 100 %}selected{% endif %}>100</option>
+            <option value="500" {% if bet_page_size == 500 %}selected{% endif %}>500</option>
+            <option value="1000" {% if bet_page_size == 1000 %}selected{% endif %}>1,000</option>
+            <option value="10000" {% if bet_page_size == 10000 %}selected{% endif %}>10,000</option>
+        </select>
+        per page
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="?export=bets_csv&bet_q={{ bet_q }}&bet_date_from={{ bet_date_from }}&bet_date_to={{ bet_date_to }}">Download CSV</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>Date</th><th>Match</th><th>Selection</th><th>Odds</th><th>Stake</th><th>Potential Payout</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            {% for bet in bets_page %}
+                <tr>
+                    <td>{{ bet.created_at|date:"Y-m-d H:i" }}</td>
+                    <td><a href="{% url 'web:admin_bet_detail' bet.id %}">{{ bet.match.home_team }} v {{ bet.match.away_team }}</a></td>
+                    <td>{{ bet.selection }}</td>
+                    <td>{{ bet.odds }}</td>
+                    <td>{{ bet.stake }}</td>
+                    <td>{{ bet.potential_payout }}</td>
+                    <td>{{ bet.status }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">No bets match this search.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if bets_page.has_previous or bets_page.has_next %}
+        <div>
+            {% if bets_page.has_previous %}<a class="btn" href="?bet_page={{ bets_page.previous_page_number }}&bet_q={{ bet_q }}&bet_date_from={{ bet_date_from }}&bet_date_to={{ bet_date_to }}&bet_page_size={{ bet_page_size }}">Previous</a>{% endif %}
+            <span>Page {{ bets_page.number }} of {{ bets_page.paginator.num_pages }} ({{ bets_page.paginator.count }} total)</span>
+            {% if bets_page.has_next %}<a class="btn" href="?bet_page={{ bets_page.next_page_number }}&bet_q={{ bet_q }}&bet_date_from={{ bet_date_from }}&bet_date_to={{ bet_date_to }}&bet_page_size={{ bet_page_size }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+
+    <h2 style="margin-top:32px;">Deposits &amp; Withdrawals</h2>
+    <form method="get" style="margin-bottom: 12px;">
+        <input type="hidden" name="bet_q" value="{{ bet_q }}">
+        <input type="hidden" name="bet_date_from" value="{{ bet_date_from }}">
+        <input type="hidden" name="bet_date_to" value="{{ bet_date_to }}">
+        <input type="text" name="pay_q" value="{{ pay_q }}" placeholder="Search by address / currency / ID">
+        From <input type="date" name="pay_date_from" value="{{ pay_date_from }}">
+        To <input type="date" name="pay_date_to" value="{{ pay_date_to }}">
+        Show
+        <select name="pay_page_size">
+            <option value="10" {% if pay_page_size == 10 %}selected{% endif %}>10</option>
+            <option value="50" {% if pay_page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if pay_page_size == 100 %}selected{% endif %}>100</option>
+            <option value="500" {% if pay_page_size == 500 %}selected{% endif %}>500</option>
+            <option value="1000" {% if pay_page_size == 1000 %}selected{% endif %}>1,000</option>
+            <option value="10000" {% if pay_page_size == 10000 %}selected{% endif %}>10,000</option>
+        </select>
+        per page
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="?export=payments_csv&pay_q={{ pay_q }}&pay_date_from={{ pay_date_from }}&pay_date_to={{ pay_date_to }}">Download CSV</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>Date</th><th>Type</th><th>Amount</th><th>Currency</th><th>Status</th><th>Provider</th><th>Address / ID</th></tr>
+        </thead>
+        <tbody>
+            {% for p in payments_page %}
+                <tr>
+                    <td>{{ p.created_at|date:"Y-m-d H:i" }}</td>
+                    <td>{{ p.payment_type }}</td>
+                    <td>{{ p.amount }}</td>
+                    <td>{{ p.currency }}</td>
+                    <td>{{ p.status }}</td>
+                    <td>{{ p.provider }}</td>
+                    <td><code>{{ p.address|default:p.external_id }}</code></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">No deposits/withdrawals match this search.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if payments_page.has_previous or payments_page.has_next %}
+        <div>
+            {% if payments_page.has_previous %}<a class="btn" href="?pay_page={{ payments_page.previous_page_number }}&pay_q={{ pay_q }}&pay_date_from={{ pay_date_from }}&pay_date_to={{ pay_date_to }}&pay_page_size={{ pay_page_size }}">Previous</a>{% endif %}
+            <span>Page {{ payments_page.number }} of {{ payments_page.paginator.num_pages }} ({{ payments_page.paginator.count }} total)</span>
+            {% if payments_page.has_next %}<a class="btn" href="?pay_page={{ payments_page.next_page_number }}&pay_q={{ pay_q }}&pay_date_from={{ pay_date_from }}&pay_date_to={{ pay_date_to }}&pay_page_size={{ pay_page_size }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+{% endblock %}

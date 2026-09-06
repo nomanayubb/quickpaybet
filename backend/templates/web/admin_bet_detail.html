@@ -1,0 +1,24 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Bet Detail</h1>
+
+    <div class="stat-card"><span>User</span><strong>{{ bet.user.email }}</strong></div>
+    <div class="stat-card"><span>Match</span><strong>{{ bet.match.home_team }} v {{ bet.match.away_team }}</strong></div>
+    <div class="stat-card"><span>Sport</span><strong>{{ bet.match.sport.name }}</strong></div>
+    <div class="stat-card"><span>Selection</span><strong>{{ bet.selection }}</strong></div>
+    <div class="stat-card"><span>Odds at time of bet</span><strong>{{ bet.odds }}</strong></div>
+    <div class="stat-card"><span>Stake</span><strong>{{ bet.stake }}</strong></div>
+    <div class="stat-card"><span>Potential payout</span><strong>{{ bet.potential_payout }}</strong></div>
+    <div class="stat-card"><span>Result</span><strong>{{ bet.status }}</strong></div>
+    <div class="stat-card"><span>Placed at</span><strong>{{ bet.created_at|date:"Y-m-d H:i:s" }}</strong></div>
+    <div class="stat-card"><span>Match final score</span>
+        <strong>{% if bet.match.home_score is not None %}{{ bet.match.home_score }} : {{ bet.match.away_score }}{% else %}Not finished{% endif %}</strong>
+    </div>
+    <div class="stat-card"><span>Times this user has bet on this match</span><strong>{{ times_bet_on_match }}</strong></div>
+
+    <p style="margin-top:16px;">
+        <a class="btn" href="{% url 'web:admin_user_ledger' bet.user.id %}">&larr; Back to ledger</a>
+        <a class="btn" href="{% url 'web:admin_user_detail' bet.user.id %}">User info</a>
+    </p>
+{% endblock %}
