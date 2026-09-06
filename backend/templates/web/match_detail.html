@@ -45,4 +45,72 @@
             {% if match.home_score is not None %} {{ match.home_score }} : {{ match.away_score }} {% endif %}
         </p>
     {% endif %}
+
+    {% if order_book is not None %}
+        <h3 style="margin-top:32px;">Exchange (Back / Lay)</h3>
+        {% if exchange_error %}
+            <p class="error">{{ exchange_error }}</p>
+        {% endif %}
+
+        {% if not user.is_authenticated %}
+            <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to back or lay this match.</p>
+        {% else %}
+            {% for selection, sides in order_book.items %}
+                <h4 style="text-transform:capitalize;">{{ selection }}</h4>
+                <table>
+                    <thead><tr><th>Lay odds (bet against)</th><th>Available</th><th>Back odds (bet for)</th><th>Available</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                {% for row in sides.lay %}{{ row.odds }} ({{ row.total_stake }})<br>{% empty %}&mdash;{% endfor %}
+                            </td>
+                            <td></td>
+                            <td>
+                                {% for row in sides.back %}{{ row.odds }} ({{ row.total_stake }})<br>{% empty %}&mdash;{% endfor %}
+                            </td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <form method="post" action="{% url 'web:exchange_place_order' match.pk %}" style="margin-bottom:16px;">
+                    {% csrf_token %}
+                    <input type="hidden" name="selection" value="{{ selection }}">
+                    <select name="side">
+                        <option value="back">Back {{ selection }}</option>
+                        <option value="lay">Lay {{ selection }}</option>
+                    </select>
+                    <input type="number" name="odds" step="0.01" min="1.01" placeholder="Odds" required style="width:90px;">
+                    <input type="number" name="stake" step="0.01" min="0.01" placeholder="Stake" required style="width:100px;">
+                    <button type="submit" class="btn">Place Order</button>
+                </form>
+            {% endfor %}
+
+            {% if my_exchange_orders %}
+                <h4>Your Open Orders (this match)</h4>
+                <table>
+                    <thead><tr><th>Selection</th><th>Side</th><th>Odds</th><th>Stake</th><th>Matched</th><th></th></tr></thead>
+                    <tbody>
+                        {% for o in my_exchange_orders %}
+                            <tr>
+                                <td>{{ o.selection }}</td>
+                                <td>{{ o.side }}</td>
+                                <td>{{ o.odds }}</td>
+                                <td>{{ o.stake }}</td>
+                                <td>{{ o.matched_stake }}</td>
+                                <td>
+                                    {% if o.unmatched_stake > 0 %}
+                                        <form method="post" action="{% url 'web:exchange_cancel_order' o.id %}" style="display:inline;">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn">Cancel remainder</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
+        {% endif %}
+    {% endif %}
 {% endblock %}

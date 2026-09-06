@@ -6,6 +6,12 @@
         {{ wallet.available_balance|floatformat:2 }}
         <span style="font-size:16px; color:#666;">available USDT</span>
     </div>
+    {% if wallet.reserved_balance %}
+        <div class="stat-card">
+            <span>Exposure (locked in open exchange orders)</span>
+            <strong>{{ wallet.reserved_balance|floatformat:2 }}</strong>
+        </div>
+    {% endif %}
 
     {% if pending_deposits %}
         <h3>Pending Deposits</h3>

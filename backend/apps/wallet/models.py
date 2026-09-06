@@ -34,6 +34,8 @@ class WalletTransaction(models.Model):
         BET_REFUND = 'bet_refund', 'Bet Refund'
         COMMISSION = 'commission', 'Commission'
         ADJUSTMENT = 'adjustment', 'Adjustment'
+        EXCHANGE_WON = 'exchange_won', 'Exchange Won'
+        EXCHANGE_LOST = 'exchange_lost', 'Exchange Lost'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'

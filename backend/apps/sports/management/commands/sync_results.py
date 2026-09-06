@@ -4,6 +4,7 @@ from django.utils.dateparse import parse_datetime
 from apps.sports.models import Sport, Match
 from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
 from apps.bets.services import settle_bets_for_match
+from apps.exchange.services import settle_exchange_for_match
 
 
 class Command(BaseCommand):
@@ -72,6 +73,7 @@ class Command(BaseCommand):
             match.save(update_fields=['status', 'home_score', 'away_score', 'updated_at'])
 
             settle_bets_for_match(match)
+            settle_exchange_for_match(match)
             updated += 1
 
         return updated

@@ -2,6 +2,7 @@ from django.contrib import admin, messages
 
 from .models import Sport, Tournament, Match
 from apps.bets.services import settle_bets_for_match
+from apps.exchange.services import settle_exchange_for_match
 
 
 @admin.register(Sport)
@@ -59,6 +60,7 @@ class MatchAdmin(admin.ModelAdmin):
             match.status = Match.Status.FINISHED
             match.save(update_fields=['status', 'updated_at'])
             settle_bets_for_match(match)
+            settle_exchange_for_match(match)
             settled += 1
 
         if settled:
@@ -75,6 +77,7 @@ class MatchAdmin(admin.ModelAdmin):
             match.save(update_fields=['status', 'updated_at'])
             # This refunds single bets and marks all parlay legs as refunded
             settle_bets_for_match(match)
+            settle_exchange_for_match(match)
             cancelled += 1
 
         self.message_user(request, f'{cancelled} match(es) cancelled and bets refunded.')

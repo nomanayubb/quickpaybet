@@ -3,6 +3,7 @@ import logging
 from celery import shared_task
 
 from apps.sports.models import Match
+from apps.exchange.services import settle_exchange_for_match
 from .models import Bet
 from .services import settle_bets_for_match
 
@@ -38,6 +39,7 @@ def settle_match(match_id: int) -> int:
 
     # This also settles any pending parlay legs for this match
     settle_bets_for_match(match)
+    settle_exchange_for_match(match)
 
     if pending_bet_count == 0:
         # There were no single bets, but parlay legs may have needed settlement.

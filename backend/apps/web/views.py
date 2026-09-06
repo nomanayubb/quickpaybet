@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_slug
@@ -24,6 +25,8 @@ from apps.audit.models import AuditLog
 from apps.audit.services import create_audit_log
 from apps.bets.models import Bet, ParlayBet
 from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
+from apps.exchange.services import place_order as place_exchange_order, cancel_order as cancel_exchange_order, settle_exchange_for_match
+from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.sports.models import Match, Sport, Tournament
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
@@ -371,6 +374,7 @@ def admin_settle_match_view(request, match_id):
         match.status = Match.Status.FINISHED
         match.save()
         settle_bets_for_match(match)
+        settle_exchange_for_match(match)
         create_audit_log(
             user=request.user,
             action='match_settled',
@@ -398,6 +402,7 @@ def admin_cancel_match_view(request, match_id):
     match.save()
     # This refunds pending single bets and marks parlay legs as refunded
     settle_bets_for_match(match)
+    settle_exchange_for_match(match)
     create_audit_log(
         user=request.user,
         action='match_cancelled',
@@ -1410,12 +1415,24 @@ def match_detail_view(request, pk):
     elif request.method == 'POST' and not request.user.is_authenticated:
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
+    from apps.exchange.services import get_order_book
+
+    my_exchange_orders = []
+    if request.user.is_authenticated:
+        my_exchange_orders = list(
+            ExchangeOrder.objects.filter(match=match, user=request.user, status=ExchangeOrder.Status.OPEN)
+            .order_by('-created_at')
+        )
+
     return render(
         request,
         'web/match_detail.html',
         {
             'match': match,
             'error': place_error,
+            'order_book': get_order_book(match) if match.status in (Match.Status.SCHEDULED, Match.Status.LIVE) else None,
+            'my_exchange_orders': my_exchange_orders,
+            'exchange_error': request.GET.get('exchange_error', ''),
             'active': 'matches',
         },
     )
@@ -1447,6 +1464,48 @@ def place_bet_view(request, pk):
                 {'match': match, 'error': 'Invalid stake.'},
             )
     return redirect('web:match_detail', pk=match.pk)
+
+
+def _redirect_with_exchange_error(match_pk, message):
+    from urllib.parse import urlencode
+    url = reverse('web:match_detail', kwargs={'pk': match_pk})
+    return redirect(f'{url}?{urlencode({"exchange_error": message})}')
+
+
+@login_required
+@require_POST
+def exchange_place_order_view(request, pk):
+    match = get_object_or_404(Match, pk=pk)
+    try:
+        selection = request.POST.get('selection')
+        side = request.POST.get('side')
+        odds = Decimal(request.POST.get('odds', ''))
+        stake = Decimal(request.POST.get('stake', ''))
+        place_exchange_order(
+            user=request.user,
+            match_id=match.id,
+            selection=selection,
+            side=side,
+            odds=odds,
+            stake=stake,
+        )
+    except SERVICE_ERRORS as exc:
+        return _redirect_with_exchange_error(match.pk, _error_message(exc))
+    except InvalidOperation:
+        return _redirect_with_exchange_error(match.pk, 'Invalid odds or stake.')
+    return redirect('web:match_detail', pk=match.pk)
+
+
+@login_required
+@require_POST
+def exchange_cancel_order_view(request, order_id):
+    order = get_object_or_404(ExchangeOrder, pk=order_id, user=request.user)
+    try:
+        cancel_exchange_order(user=request.user, order_id=order.id)
+    except SERVICE_ERRORS:
+        pass
+    return redirect('web:match_detail', pk=order.match_id)
+
 
 @login_required
 def parlay_bet_view(request):
@@ -1673,6 +1732,28 @@ BET_STATUS_FILTERS = {
     'lost': (Bet.Status.LOST, 'Lost', 'This selection did not win.'),
     'cancelled': (Bet.Status.REFUNDED, 'Cancelled', 'The match was cancelled — your stake was refunded in full.'),
 }
+
+
+@login_required
+def exchange_history_view(request):
+    orders = ExchangeOrder.objects.filter(user=request.user).select_related('match', 'match__sport').order_by('-created_at')
+    paginator = Paginator(orders, 25)
+    orders_page = paginator.get_page(request.GET.get('page'))
+
+    from django.db.models import Q as _Q
+    fills = ExchangeFill.objects.filter(
+        _Q(back_order__user=request.user) | _Q(lay_order__user=request.user)
+    ).select_related('match', 'back_order', 'lay_order', 'back_order__user', 'lay_order__user').order_by('-created_at')[:100]
+
+    return render(
+        request,
+        'web/exchange_history.html',
+        {
+            'orders_page': orders_page,
+            'fills': fills,
+            'active': 'exchange_history',
+        },
+    )
 
 
 @login_required

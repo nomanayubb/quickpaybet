@@ -87,6 +87,7 @@
                 {% endif %}
                 <a href="{% url 'web:parlay_bet' %}" class="{% if active == 'parlay_bet' %}active{% endif %}">Parlay Bet</a>
                 <a href="{% url 'web:parlay_history' %}" class="{% if active == 'parlay_history' %}active{% endif %}">My Parlays</a>
+                <a href="{% url 'web:exchange_history' %}" class="{% if active == 'exchange_history' %}active{% endif %}">My Exchange Bets</a>
                 <a href="{% url 'web:wallet' %}" class="{% if active == 'wallet' %}active{% endif %}">Wallet</a>
                 <a href="{% url 'web:bets' %}" class="{% if active == 'bets' %}active{% endif %}">My Bets</a>
                 <form class="logout-form" method="post" action="{% url 'web:logout' %}">
