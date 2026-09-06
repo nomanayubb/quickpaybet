@@ -31,6 +31,30 @@ services:
       - db
       - redis
 
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: quickpaybet_prod_celery_worker
+    command: celery -A config worker -l info
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: quickpaybet_prod_celery_beat
+    command: celery -A config beat -l info
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
   nginx:
     image: nginx:1.27-alpine
     container_name: quickpaybet_prod_nginx

@@ -9,7 +9,9 @@ This file tracks action items that require input or approval from the client to 
 
 ## Open Active Tasks
 
-- [ ] Provide NOWPayments live API key and IPN secret (or another crypto provider)
+- [x] Provide NOWPayments live API key — **received 2026-09-06, verified working**: real deposit creation tested end-to-end and confirmed live (creates a real deposit address).
+- [x] Provide NOWPayments **IPN secret** — **received and verified working 2026-09-06**. Also caught and fixed a real bug while testing this: the webhook signature check was hashing the request body in the wrong format (NOWPayments requires the JSON re-sorted before hashing) and would have silently rejected every real deposit confirmation. Fixed and confirmed working with a realistic simulated webhook.
+- [ ] Provide NOWPayments account **email + password + 2FA method** (or set up payouts yourself) — confirmed 2026-09-06 that real crypto **withdrawals** need a separate login flow (email/password + 2FA) to get a JWT token; the API key alone (which works for deposits) is not accepted for the payout endpoint. Until this is provided, withdrawals will safely fail and auto-refund the user rather than losing money — real payouts can't go out yet.
 - [ ] Provide The Odds API key and select sport key(s)
 - [ ] Provide production SMTP credentials for email delivery
 - [ ] Provide domain name and hosting/VPS details

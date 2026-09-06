@@ -3,8 +3,9 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .permissions import IsAdminOrMaster
+from .permissions import IsAdminOrMaster, CanManageTargetUser
 from .serializers import (
     RegisterSerializer,
     UserSerializer,
@@ -16,9 +17,20 @@ from .serializers import (
 User = get_user_model()
 
 
+class ThrottledTokenObtainPairView(TokenObtainPairView):
+    """
+    Same as simplejwt's login view, but with a tight per-IP rate limit.
+    The generic API-wide anon throttle (100/hour) is far too loose for a
+    login endpoint on its own — this closes the gap between the API login
+    and the web login, which already has its own 5-attempts/minute lockout.
+    """
+    throttle_scope = 'auth'
+
+
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_scope = 'auth'
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -44,11 +56,12 @@ class MeView(generics.RetrieveAPIView):
 class AdminUserUpdateView(generics.RetrieveUpdateAPIView):
     serializer_class = AdminUserUpdateSerializer
     queryset = User.objects.all()
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrMaster]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrMaster, CanManageTargetUser]
 
 
 class PasswordResetRequestView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = 'auth'
 
     def post(self, request, *args, **kwargs):
         serializer = RequestPasswordResetSerializer(data=request.data)

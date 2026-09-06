@@ -101,7 +101,7 @@ class BettingServiceTests(TestCase):
             role=User.Role.AGENT,
             commission_rate=Decimal('10'),
         )
-        deposit_funds(parent, Decimal('0'))
+        # A Wallet is auto-created via signal when the User is created.
 
         # Make our main user a child of the parent
         self.user.parent = parent

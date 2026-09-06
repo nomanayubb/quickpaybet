@@ -179,7 +179,7 @@ This document records every meaningful step taken throughout the project based o
 Prepare environment:
 
 - `$env:ODDS_PROVIDER = "theoddsapi"`
-- `$env:ODDS_API_KEY = "245cab3c5cff52364fa847df4171e64f"`
+- `$env:ODDS_API_KEY = "<redacted 2026-09-06 – a real key was committed here in plaintext; it must be treated as leaked and rotated with the provider, then set only via the gitignored .env file>"`
 
 Run in order:
 

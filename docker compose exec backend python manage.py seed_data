@@ -1,8 +1,0 @@
-
-### 5. Open in browser
-- **Public site:** http://localhost:8000/
-- **Custom admin dashboard:** http://localhost:8000/dashboard/
-- **Django admin:** http://localhost:8000/admin/
-- **API matches list:** http://localhost:8000/api/matches/
-
-### 6. Load sample odds (optional)

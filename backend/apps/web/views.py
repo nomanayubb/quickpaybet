@@ -7,6 +7,9 @@ from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_slug
+from django.db import IntegrityError
+from rest_framework.exceptions import ValidationError as ServiceValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from datetime import timedelta
@@ -15,21 +18,73 @@ from django.conf import settings
 from decimal import Decimal, InvalidOperation
 
 from apps.accounts.models import User, PasswordResetToken
+from apps.accounts.permissions import roles_assignable_by, user_can_manage_target
 from apps.audit.models import AuditLog
+from apps.audit.services import create_audit_log
 from apps.bets.models import Bet, ParlayBet
 from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
 from apps.sports.models import Match, Sport, Tournament
 from apps.wallet.models import Wallet, WalletTransaction
-from apps.wallet.services import deposit_funds, withdraw_funds
+from apps.wallet.services import deposit_funds
 from apps.payments.models import CryptoPayment
-from apps.payments.services import create_deposit, handle_deposit_success
+from apps.payments.providers import get_payment_provider
+from apps.payments.services import create_deposit, create_withdrawal_request, handle_deposit_success
 from apps.reports.services import get_overview_report, get_daily_report, get_sport_report, get_user_report, get_match_report
+
+# Service functions in apps.bets / apps.wallet / apps.payments raise DRF's
+# ValidationError, not Django's `ValidationError` (which this module uses for
+# its own local, form-style validation). Any `except` clause that can catch
+# an error coming out of a service call must include both.
+SERVICE_ERRORS = (ValidationError, ServiceValidationError)
+
+
+def _error_message(exc) -> str:
+    """Extract a single human-readable message from either exception type."""
+    if isinstance(exc, ServiceValidationError):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            for value in detail.values():
+                return str(value[0]) if isinstance(value, list) and value else str(value)
+        if isinstance(detail, list) and detail:
+            return str(detail[0])
+        return str(detail)
+    if isinstance(exc, ValidationError):
+        messages = getattr(exc, 'messages', None)
+        if messages:
+            return '; '.join(messages)
+    return str(exc)
+
+
+def _get_ip(request):
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+def _rate_limited(request, key_prefix: str, limit: int, window_seconds: int) -> bool:
+    """
+    Simple per-IP rate limiter for plain Django views (the web app has no
+    DRF throttle classes to lean on). Returns True if the caller should be
+    blocked. Used for registration and password-reset requests, which had
+    no abuse protection at all before this — only the login view did.
+    """
+    key = f'{key_prefix}_{_get_ip(request)}'
+    count = cache.get_or_set(key, 0, timeout=window_seconds)
+    if count >= limit:
+        return True
+    cache.set(key, count + 1, timeout=window_seconds)
+    return False
 
 
 def _has_dashboard_access(user):
     if not user.is_authenticated:
         return False
     return user.is_staff or user.role in (User.Role.ADMIN, User.Role.MASTER)
+
+
+def _is_full_admin(user):
+    return bool(user.is_authenticated and (user.is_staff or user.is_superuser or user.role == User.Role.ADMIN))
 
 
 def admin_dashboard_view(request):
@@ -91,6 +146,11 @@ def admin_sports_view(request):
                 slug = request.POST.get('slug', '').strip()
                 if not name or not slug:
                     raise ValidationError('Sport name and slug are required.')
+                # Sport.objects.create() bypasses the model's SlugField format
+                # validation entirely (Django only validates on full_clean(),
+                # not on save()) - check it explicitly so a bad slug can't
+                # get in and break URL/provider-key matching downstream.
+                validate_slug(slug)
                 if Sport.objects.filter(slug=slug).exists():
                     raise ValidationError('Sport with this slug already exists.')
                 Sport.objects.create(name=name, slug=slug)
@@ -108,9 +168,9 @@ def admin_sports_view(request):
             else:
                 raise ValidationError('Invalid form.')
         except ValidationError as exc:
-            error = str(exc)
-        except Exception as exc:
-            error = str(exc)
+            error = _error_message(exc)
+        except IntegrityError:
+            error = 'A tournament with this sport, name, and season already exists.'
 
         if not error:
             return redirect('web:admin_sports')
@@ -174,8 +234,8 @@ def admin_create_match_view(request):
                     d = Decimal(value)
                 except InvalidOperation:
                     raise ValidationError('Odds must be a valid decimal number.')
-                if d <= 0:
-                    raise ValidationError('Odds must be positive.')
+                if d <= Decimal('1.00'):
+                    raise ValidationError('Odds must be greater than 1.00.')
                 return d
 
             Match.objects.create(
@@ -191,7 +251,7 @@ def admin_create_match_view(request):
             )
             return redirect('web:admin_matches')
         except (ValidationError, InvalidOperation, ValueError) as exc:
-            error = str(exc)
+            error = _error_message(exc)
 
     return render(
         request,
@@ -258,8 +318,8 @@ def admin_edit_match_view(request, match_id):
                     d = Decimal(value)
                 except InvalidOperation:
                     raise ValidationError('Odds must be a valid decimal number.')
-                if d <= 0:
-                    raise ValidationError('Odds must be positive.')
+                if d <= Decimal('1.00'):
+                    raise ValidationError('Odds must be greater than 1.00.')
                 return d
 
             match.home_team = home_team
@@ -273,7 +333,7 @@ def admin_edit_match_view(request, match_id):
             match.save()
             return redirect('web:admin_matches')
         except (ValidationError, InvalidOperation, ValueError) as exc:
-            error = str(exc)
+            error = _error_message(exc)
 
     return render(
         request,
@@ -304,6 +364,14 @@ def admin_settle_match_view(request, match_id):
         match.status = Match.Status.FINISHED
         match.save()
         settle_bets_for_match(match)
+        create_audit_log(
+            user=request.user,
+            action='match_settled',
+            target_type='match',
+            target_id=match.id,
+            metadata={'home_score': match.home_score, 'away_score': match.away_score},
+            ip_address=_get_ip(request),
+        )
     except (ValueError, ValidationError):
         pass
 
@@ -323,6 +391,13 @@ def admin_cancel_match_view(request, match_id):
     match.save()
     # This refunds pending single bets and marks parlay legs as refunded
     settle_bets_for_match(match)
+    create_audit_log(
+        user=request.user,
+        action='match_cancelled',
+        target_type='match',
+        target_id=match.id,
+        ip_address=_get_ip(request),
+    )
 
     return redirect('web:admin_matches')
 
@@ -362,6 +437,9 @@ def admin_users_view(request):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
     users_list = User.objects.select_related('parent').order_by('email')
+    if not _is_full_admin(request.user):
+        # A master only manages/sees their own direct downstream users.
+        users_list = users_list.filter(parent_id=request.user.id)
     paginator = Paginator(users_list, 20)
     page_number = request.GET.get('page')
     users = paginator.get_page(page_number)
@@ -382,13 +460,24 @@ def admin_user_update_view(request, user_id):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
     user = get_object_or_404(User, pk=user_id)
-    possible_parents = User.objects.exclude(pk=user.pk).order_by('email')
+
+    if not user_can_manage_target(request.user, user):
+        return render(
+            request,
+            'web/admin_user_edit.html',
+            {'error': 'You cannot manage this user.', 'edit_user': user, 'possible_parents': User.objects.none()},
+            status=403,
+        )
+
+    is_full_admin = _is_full_admin(request.user)
+    allowed_roles = roles_assignable_by(request.user)
+    possible_parents = User.objects.exclude(pk=user.pk).order_by('email') if is_full_admin else User.objects.none()
 
     if request.method == 'POST':
         try:
             new_role = request.POST.get('role')
-            if new_role not in User.Role.values:
-                raise ValidationError('Invalid role.')
+            if new_role not in allowed_roles:
+                raise ValidationError('You are not allowed to assign that role.')
 
             parent_raw = request.POST.get('parent_id', '').strip()
             min_bet_raw = request.POST.get('min_bet_amount', '').strip()
@@ -398,13 +487,16 @@ def admin_user_update_view(request, user_id):
 
             user.role = new_role
 
-            if parent_raw:
-                try:
-                    user.parent_id = int(parent_raw)
-                except (TypeError, ValueError):
-                    raise ValidationError('Invalid parent user.')
-            else:
-                user.parent = None
+            if is_full_admin:
+                # Only a full admin may reassign which master/agent a user reports to.
+                if parent_raw:
+                    try:
+                        user.parent_id = int(parent_raw)
+                    except (TypeError, ValueError):
+                        raise ValidationError('Invalid parent user.')
+                else:
+                    user.parent = None
+            # Masters editing their own direct child leave `parent` untouched.
 
             # Parse optional bet limits
             user.min_bet_amount = Decimal(min_bet_raw) if min_bet_raw else None
@@ -429,15 +521,30 @@ def admin_user_update_view(request, user_id):
             user.is_betting_enabled = is_betting_enabled
             user.save()
 
+            create_audit_log(
+                user=request.user,
+                action='user_updated',
+                target_type='user',
+                target_id=user.id,
+                metadata={
+                    'role': user.role,
+                    'commission_rate': str(user.commission_rate),
+                    'is_betting_enabled': user.is_betting_enabled,
+                },
+                ip_address=_get_ip(request),
+            )
+
             return redirect('web:admin_users')
         except (ValidationError, InvalidOperation, ValueError) as exc:
             return render(
                 request,
                 'web/admin_user_edit.html',
                 {
-                    'error': str(exc),
+                    'error': _error_message(exc),
                     'edit_user': user,
                     'possible_parents': possible_parents,
+                    'allowed_roles': allowed_roles,
+                    'can_edit_parent': is_full_admin,
                 },
             )
 
@@ -447,6 +554,8 @@ def admin_user_update_view(request, user_id):
         {
             'edit_user': user,
             'possible_parents': possible_parents,
+            'allowed_roles': allowed_roles,
+            'can_edit_parent': is_full_admin,
         },
     )
 
@@ -460,6 +569,13 @@ def home_view(request):
 
 def register_view(request):
     if request.method == 'POST':
+        if _rate_limited(request, 'register_attempts', limit=10, window_seconds=3600):
+            return render(
+                request,
+                'web/register.html',
+                {'error': 'Too many registration attempts from this address. Try again later.'},
+            )
+
         email = request.POST.get('email', '').strip()
         password = request.POST.get('password1', '')
         password2 = request.POST.get('password2', '')
@@ -534,6 +650,13 @@ def logout_view(request):
 
 def password_reset_request_view(request):
     if request.method == 'POST':
+        if _rate_limited(request, 'password_reset_attempts', limit=5, window_seconds=3600):
+            return render(
+                request,
+                'web/reset_password.html',
+                {'error': 'Too many password reset requests from this address. Try again later.'},
+            )
+
         email = request.POST.get('email', '').strip()
         try:
             user = User.objects.get(email=email)
@@ -642,8 +765,10 @@ def match_detail_view(request, pk):
                 stake=stake,
             )
             return redirect('web:match_detail', pk=match.pk)
-        except (ValidationError, InvalidOperation) as exc:
-            place_error = exc if isinstance(exc, ValidationError) else ValidationError('Invalid stake.')
+        except SERVICE_ERRORS as exc:
+            place_error = _error_message(exc)
+        except InvalidOperation:
+            place_error = 'Invalid stake.'
     elif request.method == 'POST' and not request.user.is_authenticated:
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
 
@@ -671,14 +796,17 @@ def place_bet_view(request, pk):
                 selection=selection,
                 stake=stake,
             )
-        except (ValidationError, InvalidOperation) as exc:
+        except SERVICE_ERRORS as exc:
             return render(
                 request,
                 'web/match_detail.html',
-                {
-                    'match': match,
-                    'error': exc if isinstance(exc, ValidationError) else ValidationError('Invalid stake.'),
-                },
+                {'match': match, 'error': _error_message(exc)},
+            )
+        except InvalidOperation:
+            return render(
+                request,
+                'web/match_detail.html',
+                {'match': match, 'error': 'Invalid stake.'},
             )
     return redirect('web:match_detail', pk=match.pk)
 
@@ -723,7 +851,9 @@ def parlay_bet_view(request):
                 selections=selections,
             )
             return redirect('web:parlay_history')
-        except (ValidationError, InvalidOperation, ValueError) as exc:
+        except SERVICE_ERRORS as exc:
+            error = _error_message(exc)
+        except (InvalidOperation, ValueError) as exc:
             error = str(exc)
 
     return render(
@@ -748,25 +878,34 @@ def parlay_history_view(request):
         },
     )
 
-@login_required
-def wallet_view(request):
-    wallet, _ = Wallet.objects.get_or_create(user=request.user)
+def _wallet_context(user, extra=None):
+    wallet, _ = Wallet.objects.get_or_create(user=user)
     transactions = WalletTransaction.objects.filter(wallet=wallet).select_related('wallet')
     pending_deposits = CryptoPayment.objects.filter(
-        user=request.user,
+        user=user,
         payment_type=CryptoPayment.PaymentType.DEPOSIT,
         status=CryptoPayment.Status.PENDING,
     )
-    return render(
-        request,
-        'web/wallet.html',
-        {
-            'wallet': wallet,
-            'transactions': transactions,
-            'pending_deposits': pending_deposits,
-            'active': 'wallet',
-        },
-    )
+    context = {
+        'wallet': wallet,
+        'transactions': transactions,
+        'pending_deposits': pending_deposits,
+        'active': 'wallet',
+        # The self-confirm button must only ever be usable when the mock
+        # provider is active (local/dev). It is never shown against a real
+        # payment provider — deposits there are only ever confirmed by a
+        # verified provider webhook.
+        'dev_confirm_available': get_payment_provider().name == 'mock',
+    }
+    if extra:
+        context.update(extra)
+    return context
+
+
+@login_required
+def wallet_view(request):
+    return render(request, 'web/wallet.html', _wallet_context(request.user))
+
 
 @login_required
 @require_POST
@@ -775,14 +914,15 @@ def wallet_deposit_view(request):
         amount = Decimal(request.POST.get('amount', '0'))
         if amount <= 0:
             raise ValueError('Must be positive')
-        payment = create_deposit(user=request.user, amount=amount, currency='USDT')
+        create_deposit(user=request.user, amount=amount, currency='USDT')
         return redirect('web:wallet')
     except (ValueError, InvalidOperation):
         return render(
             request,
             'web/wallet.html',
-            {'error': 'Invalid deposit amount.'},
+            _wallet_context(request.user, {'error': 'Invalid deposit amount.'}),
         )
+
 
 @login_required
 @require_POST
@@ -792,22 +932,57 @@ def wallet_withdraw_view(request):
         address = request.POST.get('address', '').strip()
         if not address:
             raise ValueError('Address required')
-        withdraw_funds(
+        create_withdrawal_request(
             user=request.user,
             amount=amount,
-            description=f'Withdrawal to {address}',
+            address=address,
+            currency='USDT',
+        )
+        create_audit_log(
+            user=request.user,
+            action='withdrawal_requested',
+            target_type='user',
+            target_id=request.user.id,
+            metadata={'amount': str(amount), 'address': address},
+            ip_address=_get_ip(request),
         )
         return redirect('web:wallet')
-    except (ValueError, ValidationError, InvalidOperation) as exc:
+    except (ValueError, InvalidOperation):
         return render(
             request,
             'web/wallet.html',
-            {'error': str(exc)},
+            _wallet_context(request.user, {'error': 'Invalid withdrawal amount.'}),
         )
+    except SERVICE_ERRORS as exc:
+        return render(
+            request,
+            'web/wallet.html',
+            _wallet_context(request.user, {'error': _error_message(exc)}),
+        )
+
 
 @login_required
 @require_POST
 def confirm_deposit_view(request, deposit_id):
+    """
+    Dev/testing convenience ONLY. Real deposits are confirmed exclusively by
+    a signature-verified provider webhook (apps.payments.views.PaymentWebhookView).
+    This view must never be usable against a real payment provider — it is
+    hard-blocked below whenever PAYMENT_PROVIDER isn't 'mock', regardless of
+    what URL is hit or what DEBUG is set to, because that setting is exactly
+    the kind of thing a deployment can get wrong.
+    """
+    if get_payment_provider().name != 'mock':
+        return render(
+            request,
+            'web/wallet.html',
+            _wallet_context(
+                request.user,
+                {'error': 'Deposits can only be confirmed by the payment provider.'},
+            ),
+            status=403,
+        )
+
     deposit = get_object_or_404(
         CryptoPayment,
         pk=deposit_id,
@@ -818,12 +993,20 @@ def confirm_deposit_view(request, deposit_id):
 
     try:
         handle_deposit_success(deposit.external_id)
+        create_audit_log(
+            user=request.user,
+            action='dev_deposit_self_confirmed',
+            target_type='crypto_payment',
+            target_id=deposit.id,
+            metadata={'amount': str(deposit.amount), 'provider': 'mock'},
+            ip_address=_get_ip(request),
+        )
         return redirect('web:wallet')
-    except ValidationError as exc:
+    except SERVICE_ERRORS as exc:
         return render(
             request,
             'web/wallet.html',
-            {'error': str(exc)},
+            _wallet_context(request.user, {'error': _error_message(exc)}),
         )
 
 @login_required

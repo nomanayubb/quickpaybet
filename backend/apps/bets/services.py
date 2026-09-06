@@ -286,33 +286,34 @@ def _settle_parlay_if_ready(parlay_id: int):
 
 def settle_parlays_for_match(match: Match):
     """Settle pending parlay legs for a finished / cancelled match."""
-    legs = ParlayLeg.objects.select_for_update().filter(
-        match=match,
-        outcome=ParlayLeg.Outcome.PENDING,
-    )
-    if not legs.exists():
-        return
-
-    affected_parlay_ids = set(legs.values_list('parlay_id', flat=True))
-
-    if match.status == Match.Status.CANCELLED:
-        legs.update(outcome=ParlayLeg.Outcome.REFUNDED)
-    elif match.status == Match.Status.FINISHED:
-        if match.home_score is None or match.away_score is None:
+    with transaction.atomic():
+        legs = ParlayLeg.objects.select_for_update().filter(
+            match=match,
+            outcome=ParlayLeg.Outcome.PENDING,
+        )
+        if not legs.exists():
             return
-        if match.home_score > match.away_score:
-            match_result = Bet.Selection.HOME
-        elif match.away_score > match.home_score:
-            match_result = Bet.Selection.AWAY
-        else:
-            match_result = Bet.Selection.DRAW
 
-        for leg in legs:
-            if leg.selection == match_result:
-                leg.outcome = ParlayLeg.Outcome.WON
+        affected_parlay_ids = set(legs.values_list('parlay_id', flat=True))
+
+        if match.status == Match.Status.CANCELLED:
+            legs.update(outcome=ParlayLeg.Outcome.REFUNDED)
+        elif match.status == Match.Status.FINISHED:
+            if match.home_score is None or match.away_score is None:
+                return
+            if match.home_score > match.away_score:
+                match_result = Bet.Selection.HOME
+            elif match.away_score > match.home_score:
+                match_result = Bet.Selection.AWAY
             else:
-                leg.outcome = ParlayLeg.Outcome.LOST
-            leg.save(update_fields=['outcome'])
+                match_result = Bet.Selection.DRAW
+
+            for leg in legs:
+                if leg.selection == match_result:
+                    leg.outcome = ParlayLeg.Outcome.WON
+                else:
+                    leg.outcome = ParlayLeg.Outcome.LOST
+                leg.save(update_fields=['outcome'])
 
     for parlay_id in affected_parlay_ids:
         _settle_parlay_if_ready(parlay_id)
@@ -376,12 +377,16 @@ def settle_bets_for_match(match: Match):
         return
 
     if match.status == Match.Status.CANCELLED:
-        pending_bets = Bet.objects.select_for_update().filter(
-            match=match,
-            status=Bet.Status.PENDING,
-        )
-        for bet in pending_bets:
+        with transaction.atomic():
+            pending_bet_ids = list(
+                Bet.objects.select_for_update().filter(
+                    match=match,
+                    status=Bet.Status.PENDING,
+                ).values_list('id', flat=True)
+            )
+        for bet_id in pending_bet_ids:
             with transaction.atomic():
+                bet = Bet.objects.select_for_update().get(pk=bet_id)
                 refund_bet(bet)
 
     if match.status == Match.Status.FINISHED and match.home_score is not None and match.away_score is not None:
@@ -392,13 +397,17 @@ def settle_bets_for_match(match: Match):
         else:
             match_result = Bet.Selection.DRAW
 
-        pending_bets = Bet.objects.select_for_update().filter(
-            match=match,
-            status=Bet.Status.PENDING,
-        )
+        with transaction.atomic():
+            pending_bet_ids = list(
+                Bet.objects.select_for_update().filter(
+                    match=match,
+                    status=Bet.Status.PENDING,
+                ).values_list('id', flat=True)
+            )
 
-        for bet in pending_bets:
+        for bet_id in pending_bet_ids:
             with transaction.atomic():
+                bet = Bet.objects.select_for_update().get(pk=bet_id)
                 settle_bet(bet, match_result)
 
     settle_parlays_for_match(match)

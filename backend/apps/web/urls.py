@@ -42,16 +42,24 @@ urlpatterns = [
     path('matches/', matches_view, name='matches'),
     path('matches/<int:pk>/', match_detail_view, name='match_detail'),
     path('dashboard/', admin_dashboard_view, name='dashboard'),
-    path('admin/reports/', admin_reports_view, name='admin_reports'),
-    path('admin/sports/', admin_sports_view, name='admin_sports'),
-    path('admin/matches/', admin_matches_view, name='admin_matches'),
-    path('admin/matches/create/', admin_create_match_view, name='admin_create_match'),
-    path('admin/matches/<int:match_id>/edit/', admin_edit_match_view, name='admin_edit_match'),
-    path('admin/matches/<int:match_id>/settle/', admin_settle_match_view, name='admin_settle_match'),
-    path('admin/matches/<int:match_id>/cancel/', admin_cancel_match_view, name='admin_cancel_match'),
-    path('admin/audit/', admin_audit_logs_view, name='admin_audit'),
-    path('admin/users/', admin_users_view, name='admin_users'),
-    path('admin/users/<int:user_id>/edit/', admin_user_update_view, name='admin_user_edit'),
+    # NOTE: this custom admin section deliberately lives under `panel/`, not
+    # `admin/`. Django's built-in admin is mounted at `admin/` in
+    # config/urls.py and registers a catch-all view for anything under that
+    # prefix (AdminSite.catch_all_view) — any URL starting with `admin/`
+    # never reaches these views at all, it's silently swallowed by Django's
+    # own admin and either redirects to /admin/login/ or 404s. This cost a
+    # full custom admin section its reachability until caught by testing.
+    # Keep this prefix as `panel/` (or anything other than `admin/`).
+    path('panel/reports/', admin_reports_view, name='admin_reports'),
+    path('panel/sports/', admin_sports_view, name='admin_sports'),
+    path('panel/matches/', admin_matches_view, name='admin_matches'),
+    path('panel/matches/create/', admin_create_match_view, name='admin_create_match'),
+    path('panel/matches/<int:match_id>/edit/', admin_edit_match_view, name='admin_edit_match'),
+    path('panel/matches/<int:match_id>/settle/', admin_settle_match_view, name='admin_settle_match'),
+    path('panel/matches/<int:match_id>/cancel/', admin_cancel_match_view, name='admin_cancel_match'),
+    path('panel/audit/', admin_audit_logs_view, name='admin_audit'),
+    path('panel/users/', admin_users_view, name='admin_users'),
+    path('panel/users/<int:user_id>/edit/', admin_user_update_view, name='admin_user_edit'),
     path('parlay/', parlay_bet_view, name='parlay_bet'),
     path('parlays/', parlay_history_view, name='parlay_history'),
     path('wallet/', wallet_view, name='wallet'),

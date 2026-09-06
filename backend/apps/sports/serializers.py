@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from .models import Sport, Tournament, Match
@@ -57,3 +59,26 @@ class MatchOddsUpdateSerializer(serializers.ModelSerializer):
         model = Match
         fields = ('id', 'odds_home', 'odds_draw', 'odds_away', 'status')
         read_only_fields = ('id',)
+
+    def _validate_odds_value(self, value, field_name):
+        if value is None:
+            return value
+        # Decimal odds below 1 are mathematically meaningless (a bettor must
+        # always at least get their stake back on a win); reject anything
+        # that would let a mistake or a compromised admin session corrupt
+        # settlement math (a zero/negative odds value would produce a zero
+        # or negative payout).
+        if value <= Decimal('1.00'):
+            raise serializers.ValidationError(
+                {field_name: 'Odds must be greater than 1.00.'}
+            )
+        return value
+
+    def validate_odds_home(self, value):
+        return self._validate_odds_value(value, 'odds_home')
+
+    def validate_odds_draw(self, value):
+        return self._validate_odds_value(value, 'odds_draw')
+
+    def validate_odds_away(self, value):
+        return self._validate_odds_value(value, 'odds_away')

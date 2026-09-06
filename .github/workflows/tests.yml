@@ -1,0 +1,83 @@
+name: Backend tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: quickpaybet
+          POSTGRES_USER: quickpaybet
+          POSTGRES_PASSWORD: quickpaybet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quickpaybet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DEBUG: "True"
+      SECRET_KEY: ci-only-not-for-production
+      ALLOWED_HOSTS: "127.0.0.1,localhost,testserver"
+      DATABASE_URL: postgres://quickpaybet:quickpaybet@localhost:5432/quickpaybet
+      REDIS_URL: redis://localhost:6379/0
+      CORS_ALLOW_ALL_ORIGINS: "True"
+      SECURE_SSL_REDIRECT: "False"
+      CACHE_BACKEND: redis
+      ODDS_PROVIDER: mock
+      PAYMENT_PROVIDER: mock
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Check for missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Run migrations
+        run: python manage.py migrate
+
+      - name: Run Django system checks
+        run: python manage.py check
+
+      - name: Run tests (pytest, with coverage per pytest.ini)
+        run: pytest

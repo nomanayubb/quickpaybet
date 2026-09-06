@@ -133,29 +133,67 @@ class NOWPaymentsProvider(BasePaymentProvider):
 
     def create_withdrawal(self, user, amount: Decimal, address: str, currency: str = 'USDT', external_id: str = '') -> dict:
         """
-        Skeleton for NOWPayments payouts.
-        You must implement the actual /payment request with a live API key.
+        NOWPayments payouts (mass withdrawal / /v1/payout).
+
+        IMPORTANT / NOT YET LIVE-VERIFIED: NOWPayments' real payout endpoint
+        requires a JWT bearer token obtained via a separate email+password+2FA
+        login flow (/v1/auth), not the simple `x-api-key` header used for
+        deposits. That JWT/2FA flow is not implemented in this codebase yet —
+        it needs the client's real NOWPayments account credentials and a 2FA
+        device to build and test properly (tracked in `client tasks.md`).
+
+        Until that is built, this method makes a best-effort call using the
+        api-key header. If NOWPayments rejects it (most likely, given the
+        auth mismatch above), this raises — the caller
+        (`apps.payments.services.create_withdrawal_request`) already treats a
+        raised exception as "provider could not process this" and refunds
+        the user's wallet. It must never fabricate a success response.
         """
         if not external_id:
             external_id = f"wd_{uuid.uuid4().hex}"
 
         payload = {
-            'withdrawal': address,
-            'currency': currency.upper(),
-            'amount': str(amount),
+            'ipn_callback_url': os.getenv(
+                'NOWPAYMENTS_IPN_CALLBACK_URL',
+                'http://YOUR_DOMAIN/api/payments/webhook/',
+            ),
+            'withdrawals': [
+                {
+                    'address': address,
+                    'currency': currency.lower(),
+                    'amount': str(amount),
+                    'ipn_callback_url': os.getenv(
+                        'NOWPAYMENTS_IPN_CALLBACK_URL',
+                        'http://YOUR_DOMAIN/api/payments/webhook/',
+                    ),
+                }
+            ],
         }
 
-        # Placeholder result – real implementation would require an additional
-        # endpoint and credentials. For now we mark it as always successful.
+        result = self._post('/payout', payload)
+
         return {
-            'external_id': external_id,
+            'external_id': str(result.get('id', external_id)),
             'provider': self.name,
-            'status': 'pending',
+            # Real payouts sit in a provider-side approval queue; never report
+            # anything other than pending unless the provider response says so.
+            'status': str(result.get('status', 'pending')).lower(),
+            'payload': result,
         }
 
     def verify_webhook(self, raw_body: bytes, headers: dict | None = None) -> bool:
         """
-        Validates the signature as an HMAC‐SHA512 of the raw body.
+        Validates the signature as an HMAC-SHA512 of the JSON body.
+
+        IMPORTANT: NOWPayments does NOT sign the raw bytes as received. Per
+        their IPN docs, the signature is computed over the JSON payload
+        re-serialized with keys sorted recursively/alphabetically and no
+        extra whitespace (`json.dumps(data, separators=(',', ':'), sort_keys=True)`),
+        THEN hashed. Hashing the raw body directly (as this used to do) would
+        essentially never match a real NOWPayments signature, since key order
+        in the received bytes isn't guaranteed to already be sorted — this
+        would have silently broken every real webhook verification.
+
         The signature header MUST be 'x-nowpayments-sig'.
         If no IPN secret is configured, we accept the webhook for development.
         """
@@ -168,12 +206,19 @@ class NOWPaymentsProvider(BasePaymentProvider):
         if not signature:
             return False
 
-        if isinstance(raw_body, str):
-            raw_body = raw_body.encode('utf-8')
+        if isinstance(raw_body, bytes):
+            raw_body = raw_body.decode('utf-8')
+
+        try:
+            payload = json.loads(raw_body)
+        except (json.JSONDecodeError, ValueError):
+            return False
+
+        sorted_payload = json.dumps(payload, separators=(',', ':'), sort_keys=True)
 
         expected = hmac.new(
             self.ipn_secret.encode('utf-8'),
-            raw_body,
+            sorted_payload.encode('utf-8'),
             hashlib.sha512,
         ).hexdigest()
 

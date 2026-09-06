@@ -16,6 +16,8 @@ env = environ.Env(
     EMAIL_HOST_USER=(str, ''),
     EMAIL_HOST_PASSWORD=(str, ''),
     EMAIL_USE_TLS=(bool, False),
+    SECURE_SSL_REDIRECT=(bool, False),
+    CACHE_BACKEND=(str, 'redis'),
 )
 
 environ.Env.read_env(BASE_DIR / '.env')
@@ -110,10 +112,17 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': (
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
     ),
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/hour',
         'user': '1000/hour',
+        # Tighter, endpoint-specific limits (opted into per-view via
+        # `throttle_scope`) for the highest-value abuse/brute-force targets:
+        # login, registration, password reset, and money-moving actions.
+        # The generic 100/hour anon rate is far too loose for login attempts.
+        'auth': '10/hour',
+        'withdraw': '10/hour',
     },
 }
 
@@ -149,15 +158,33 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': REDIS_URL,
+# CACHE_BACKEND defaults to 'redis' (matching production/Docker). Set it to
+# 'locmem' in a local .env when running manage.py/tests directly on a machine
+# without a Redis server available — this only affects the cache (used for
+# login-attempt lockout and DRF throttling), never Celery, which still needs
+# a real Redis broker to run background tasks at all.
+if env('CACHE_BACKEND') == 'locmem':
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
     }
-}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+        }
+    }
+
+# SECURE_SSL_REDIRECT is deliberately its own explicit env var, not silently
+# derived from DEBUG. Forcing HTTPS redirects when TLS isn't actually
+# terminated in front of Django (e.g. nginx not yet configured with a
+# certificate) breaks the site outright rather than securing it. Turn this on
+# in production only once real TLS termination is confirmed working.
+SECURE_SSL_REDIRECT = env('SECURE_SSL_REDIRECT')
 
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True

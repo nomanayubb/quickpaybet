@@ -20,11 +20,10 @@ def sync_odds_celery():
 @shared_task
 def sync_results_celery():
     """
-    Placeholder Celery task that periodically runs `sync_results`.
-
-    In production, the actual result source (API/keyboard entry) would provide
-    match IDs and scores. This task keeps the command accessible to Celery Beat
-    but does not fetch arbitrary remote results automatically.
+    Runs the `sync_results` management command as a Celery task so results
+    are pulled from the odds provider and pending bets settled automatically,
+    on the schedule defined in config/celery.py.
     """
-    logger.info('Scheduled sync_results task called.')
+    logger.info('Calling sync_results management command.')
+    call_command('sync_results')
     return True

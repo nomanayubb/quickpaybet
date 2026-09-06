@@ -3,6 +3,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.audit.services import create_audit_log
 from .providers import get_payment_provider
 from .services import handle_deposit_success
 
@@ -45,12 +46,20 @@ class PaymentWebhookView(APIView):
 
         if provider.is_success_payment_status(provider_status):
             try:
-                handle_deposit_success(external_id)
+                payment = handle_deposit_success(external_id)
             except Exception as exc:  # noqa: BLE001 – catch and return validation error
                 return Response(
                     {'error': str(exc)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            create_audit_log(
+                user=payment.user,
+                action='deposit_confirmed',
+                target_type='crypto_payment',
+                target_id=payment.id,
+                metadata={'amount': str(payment.amount), 'provider': provider.name},
+                ip_address=request.META.get('REMOTE_ADDR'),
+            )
         elif provider_status in ('FAILED', 'CANCELLED'):
             from .models import CryptoPayment
             CryptoPayment.objects.filter(

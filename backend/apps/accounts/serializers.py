@@ -58,6 +58,35 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ('id', 'email')
 
+    def validate(self, attrs):
+        from .permissions import roles_assignable_by, user_can_manage_target
+
+        request = self.context.get('request')
+        actor = getattr(request, 'user', None)
+        target = self.instance
+
+        if actor is None or target is None:
+            return attrs
+
+        if not user_can_manage_target(actor, target):
+            raise serializers.ValidationError('You cannot manage this user.')
+
+        allowed_roles = roles_assignable_by(actor)
+        new_role = attrs.get('role', target.role)
+        if new_role not in allowed_roles:
+            raise serializers.ValidationError(
+                {'role': 'You are not allowed to assign that role.'}
+            )
+
+        if 'parent' in attrs and attrs['parent'] != target.parent:
+            is_full_admin = actor.is_superuser or actor.is_staff or actor.role == User.Role.ADMIN
+            if not is_full_admin:
+                raise serializers.ValidationError(
+                    {'parent': 'You are not allowed to reassign this user\'s parent.'}
+                )
+
+        return attrs
+
 
 class RequestPasswordResetSerializer(serializers.Serializer):
     email = serializers.EmailField()

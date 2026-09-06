@@ -5,7 +5,7 @@ from decimal import Decimal
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from apps.wallet.services import deposit_funds
+from apps.wallet.services import deposit_funds, withdraw_funds
 
 from .models import CryptoPayment
 from .providers import get_payment_provider
@@ -43,6 +43,78 @@ def create_deposit(user, amount: Decimal, currency: str = 'USDT', provider: str 
         external_id=external_id,
         address=address,
     )
+
+
+def create_withdrawal_request(user, amount: Decimal, address: str, currency: str = 'USDT') -> CryptoPayment:
+    """
+    The real withdrawal flow: deduct the stake from the wallet ledger (atomic,
+    row-locked, same as any other wallet mutation), then hand the payout off
+    to the configured payment provider, and record a CryptoPayment row so
+    there is always a real record an admin/provider can act on.
+
+    If the provider call fails, the wallet debit is reversed (refunded) and
+    the payment is marked failed — the user's balance must never be reduced
+    for a withdrawal that was never actually handed to a payment provider.
+    """
+    if amount <= 0:
+        raise ValidationError('Amount must be positive.')
+    if not address:
+        raise ValidationError('Withdrawal address is required.')
+
+    external_id = f"wd_{uuid.uuid4().hex}"
+
+    with transaction.atomic():
+        txn = withdraw_funds(
+            user=user,
+            amount=amount,
+            description=f'Crypto withdrawal to {address} via {currency}',
+        )
+
+        payment = CryptoPayment.objects.create(
+            user=user,
+            amount=amount,
+            currency=currency,
+            payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
+            status=CryptoPayment.Status.PENDING,
+            provider=os.getenv('PAYMENT_PROVIDER', 'mock').lower(),
+            external_id=external_id,
+            address=address,
+        )
+
+    provider_obj = get_payment_provider()
+    try:
+        provider_result = provider_obj.create_withdrawal(
+            user=user,
+            amount=amount,
+            address=address,
+            currency=currency,
+            external_id=external_id,
+        )
+    except Exception as exc:
+        # The provider could not be reached / rejected the payout.
+        # The user must get their money back — never leave a debited
+        # balance with no real payout in flight.
+        with transaction.atomic():
+            deposit_funds(
+                user=user,
+                amount=amount,
+                description=f'Withdrawal refund – provider error ({payment.external_id})',
+            )
+            payment.status = CryptoPayment.Status.FAILED
+            payment.save(update_fields=['status', 'updated_at'])
+        raise ValidationError(f'Withdrawal could not be processed: {exc}')
+
+    provider_status = str(provider_result.get('status', 'pending')).lower()
+    payment.provider = provider_result.get('provider', provider_obj.name)
+    if provider_status in ('success', 'completed', 'finished'):
+        payment.status = CryptoPayment.Status.COMPLETED
+    elif provider_status in ('failed', 'rejected'):
+        payment.status = CryptoPayment.Status.FAILED
+    # Otherwise it stays PENDING – most real payout APIs require manual/2FA
+    # approval on the provider side before funds actually move.
+    payment.save(update_fields=['provider', 'status', 'updated_at'])
+
+    return payment
 
 
 def handle_deposit_success(external_id: str) -> CryptoPayment:

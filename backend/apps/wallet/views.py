@@ -1,8 +1,9 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 
+from apps.audit.services import create_audit_log
 from apps.payments.serializers import CryptoPaymentSerializer
-from apps.payments.services import create_deposit
+from apps.payments.services import create_deposit, create_withdrawal_request
 
 from .models import Wallet, WalletTransaction
 from .serializers import (
@@ -11,7 +12,6 @@ from .serializers import (
     DepositSerializer,
     WithdrawSerializer,
 )
-from .services import withdraw_funds
 
 
 class WalletDetailView(generics.RetrieveAPIView):
@@ -54,20 +54,30 @@ class DepositView(generics.CreateAPIView):
 class WithdrawView(generics.CreateAPIView):
     serializer_class = WithdrawSerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'withdraw'
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        txn = withdraw_funds(
+        payment = create_withdrawal_request(
             user=request.user,
             amount=serializer.validated_data['amount'],
-            description=f"Crypto withdrawal to {serializer.validated_data['address']} via {serializer.validated_data.get('currency', 'USDT')}",
+            address=serializer.validated_data['address'],
+            currency=serializer.validated_data.get('currency', 'USDT'),
         )
-        wallet = txn.wallet
+        create_audit_log(
+            user=request.user,
+            action='withdrawal_requested',
+            target_type='crypto_payment',
+            target_id=payment.id,
+            metadata={'amount': str(payment.amount), 'address': payment.address},
+            ip_address=request.META.get('REMOTE_ADDR'),
+        )
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
         return Response(
             {
-                'transaction': WalletTransactionSerializer(txn).data,
+                'payment': CryptoPaymentSerializer(payment).data,
                 'wallet': WalletSerializer(wallet).data,
             },
             status=status.HTTP_201_CREATED,

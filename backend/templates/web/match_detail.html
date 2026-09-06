@@ -13,6 +13,9 @@
 
     {% if match.status == 'live' or match.status == 'scheduled' %}
         <h3>Place a Bet</h3>
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
         {% if not user.is_authenticated %}
             <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to place a bet.</p>
         {% else %}
