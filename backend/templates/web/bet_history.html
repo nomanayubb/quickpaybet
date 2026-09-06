@@ -2,6 +2,17 @@
 
 {% block content %}
     <h1>My Bets</h1>
+
+    <div style="margin-bottom: 8px;">
+        <a class="btn {% if status_filter == 'all' %}active{% endif %}" href="?status=all">All</a>
+        {% for key, info in status_filters.items %}
+            <a class="btn {% if status_filter == key %}active{% endif %}" href="?status={{ key }}">{{ info.1 }}</a>
+        {% endfor %}
+    </div>
+    {% if status_description %}
+        <p style="color:#555; font-size:14px;">{{ status_description }}</p>
+    {% endif %}
+
     <table>
         <thead>
             <tr>
@@ -26,8 +37,16 @@
                     <td>{{ bet.created_at }}</td>
                 </tr>
             {% empty %}
-                <tr><td colspan="7">You have no bets yet.</td></tr>
+                <tr><td colspan="7">No bets match this filter.</td></tr>
             {% endfor %}
         </tbody>
     </table>
+
+    {% if page_obj.has_previous or page_obj.has_next %}
+        <div style="margin-top: 20px;">
+            {% if page_obj.has_previous %}<a class="btn" href="?page={{ page_obj.previous_page_number }}&status={{ status_filter }}">Previous</a>{% endif %}
+            <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+            {% if page_obj.has_next %}<a class="btn" href="?page={{ page_obj.next_page_number }}&status={{ status_filter }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
 {% endblock %}

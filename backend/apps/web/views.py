@@ -1335,10 +1335,40 @@ def password_reset_confirm_view(request):
 
 
 def matches_view(request):
-    matches_list = Match.objects.select_related('sport', 'tournament').order_by('start_time')
+    """
+    Three views for a regular visitor:
+      - upcoming (default): scheduled/live matches, soonest first
+      - results: finished matches from the last 7 days, most recent first
+      - all: full match history, every sport, most recent first
+    Optionally narrowed to one sport (football, cricket, whatever is active).
+    """
+    view = request.GET.get('view', 'upcoming').strip()
+    if view not in ('upcoming', 'results', 'all'):
+        view = 'upcoming'
+    sport_slug = request.GET.get('sport', '').strip()
+
+    matches_list = Match.objects.select_related('sport', 'tournament')
+    if sport_slug:
+        matches_list = matches_list.filter(sport__slug=sport_slug)
+
+    if view == 'results':
+        seven_days_ago = timezone.now() - timedelta(days=7)
+        matches_list = matches_list.filter(
+            status=Match.Status.FINISHED,
+            start_time__gte=seven_days_ago,
+        ).order_by('-start_time')
+    elif view == 'all':
+        matches_list = matches_list.order_by('-start_time')
+    else:
+        matches_list = matches_list.filter(
+            status__in=[Match.Status.SCHEDULED, Match.Status.LIVE],
+        ).order_by('start_time')
+
     paginator = Paginator(matches_list, 20)
     page_number = request.GET.get('page')
     matches = paginator.get_page(page_number)
+
+    sports = Sport.objects.filter(is_active=True).order_by('name')
 
     return render(
         request,
@@ -1346,6 +1376,9 @@ def matches_view(request):
         {
             'matches': matches,
             'page_obj': matches,
+            'sports': sports,
+            'selected_sport': sport_slug,
+            'view': view,
             'active': 'matches',
         },
     )
@@ -1471,14 +1504,33 @@ def parlay_bet_view(request):
         },
     )
 
+PARLAY_STATUS_FILTERS = {
+    'open': (ParlayBet.Status.PENDING, 'Open', 'At least one leg hasn’t been settled yet.'),
+    'won': (ParlayBet.Status.WON, 'Won', 'Every leg won — payout has been added to your wallet.'),
+    'lost': (ParlayBet.Status.LOST, 'Lost', 'At least one leg lost, so the whole parlay lost.'),
+    'cancelled': (ParlayBet.Status.REFUNDED, 'Cancelled', 'A leg was cancelled and no leg lost — your stake was refunded in full.'),
+}
+
+
 @login_required
 def parlay_history_view(request):
-    parlays = ParlayBet.objects.filter(user=request.user).prefetch_related('legs__match')
+    status_filter = request.GET.get('status', 'all').strip()
+    parlays = ParlayBet.objects.filter(user=request.user).prefetch_related('legs__match').order_by('-created_at')
+    if status_filter in PARLAY_STATUS_FILTERS:
+        parlays = parlays.filter(status=PARLAY_STATUS_FILTERS[status_filter][0])
+
+    paginator = Paginator(parlays, 25)
+    parlays_page = paginator.get_page(request.GET.get('page'))
+
     return render(
         request,
         'web/parlay_history.html',
         {
-            'parlays': parlays,
+            'parlays': parlays_page,
+            'page_obj': parlays_page,
+            'status_filter': status_filter,
+            'status_filters': PARLAY_STATUS_FILTERS,
+            'status_description': PARLAY_STATUS_FILTERS.get(status_filter, (None, None, None))[2],
             'active': 'parlay_history',
         },
     )
@@ -1614,7 +1666,34 @@ def confirm_deposit_view(request, deposit_id):
             _wallet_context(request.user, {'error': _error_message(exc)}),
         )
 
+BET_STATUS_FILTERS = {
+    # query param value -> (Bet.Status value, user-facing label, explanation)
+    'open': (Bet.Status.PENDING, 'Open', 'The match hasn’t finished yet, or the result hasn’t been settled.'),
+    'won': (Bet.Status.WON, 'Won', 'This selection won — payout has been added to your wallet.'),
+    'lost': (Bet.Status.LOST, 'Lost', 'This selection did not win.'),
+    'cancelled': (Bet.Status.REFUNDED, 'Cancelled', 'The match was cancelled — your stake was refunded in full.'),
+}
+
+
 @login_required
 def bet_history_view(request):
-    bets = Bet.objects.filter(user=request.user).select_related('match', 'match__sport')
-    return render(request, 'web/bet_history.html', {'bets': bets, 'active': 'bets'})
+    status_filter = request.GET.get('status', 'all').strip()
+    bets = Bet.objects.filter(user=request.user).select_related('match', 'match__sport').order_by('-created_at')
+    if status_filter in BET_STATUS_FILTERS:
+        bets = bets.filter(status=BET_STATUS_FILTERS[status_filter][0])
+
+    paginator = Paginator(bets, 25)
+    bets_page = paginator.get_page(request.GET.get('page'))
+
+    return render(
+        request,
+        'web/bet_history.html',
+        {
+            'bets': bets_page,
+            'page_obj': bets_page,
+            'status_filter': status_filter,
+            'status_filters': BET_STATUS_FILTERS,
+            'status_description': BET_STATUS_FILTERS.get(status_filter, (None, None, None))[2],
+            'active': 'bets',
+        },
+    )
