@@ -7,12 +7,21 @@
         <p class="error">{{ error }}</p>
     {% endif %}
 
+    {% if can_view_sensitive %}
+        <form method="post" action="{% url 'web:admin_reset_user_password' edit_user.id %}" style="margin-bottom: 16px;">
+            {% csrf_token %}
+            <button type="submit" class="btn" onclick="return confirm('Generate a new password for this user? Their old password will stop working immediately.');">Reset password</button>
+        </form>
+    {% endif %}
+
     <form method="post">
         {% csrf_token %}
-        <div class="form-group">
-            <label>Phone number</label>
-            <input type="tel" name="phone_number" value="{{ edit_user.phone_number|default:'' }}">
-        </div>
+        {% if can_view_sensitive %}
+            <div class="form-group">
+                <label>Phone number</label>
+                <input type="tel" name="phone_number" value="{{ edit_user.phone_number|default:'' }}">
+            </div>
+        {% endif %}
         <div class="form-group">
             <label>Role</label>
             <select name="role">

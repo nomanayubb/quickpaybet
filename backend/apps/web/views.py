@@ -621,8 +621,50 @@ def admin_user_detail_view(request, user_id):
             'parlays': parlays,
             'crypto_payments': deposits_withdrawals,
             'children': children,
+            # Phone number is personal contact info - only the actual
+            # superuser (the platform owner) sees it, not every "admin"
+            # role staff account.
+            'can_view_sensitive': request.user.is_superuser,
             'active': 'admin_users',
         },
+    )
+
+
+def admin_reset_user_password_view(request, user_id):
+    """
+    Superuser-only: generate a brand-new random password for a user and show
+    it once on screen so it can be relayed (e.g. via WhatsApp) to a user who
+    can't do a self-service reset. The user's OLD password is never seen or
+    recoverable by anyone - this creates a new one instead, which is the
+    safe way to solve "user forgot their password and can't do email reset".
+    """
+    if not request.user.is_superuser:
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    if request.method != 'POST':
+        return redirect('web:admin_user_detail', user_id=user_id)
+
+    target = get_object_or_404(User, pk=user_id)
+    if not user_can_manage_target(request.user, target):
+        return redirect('web:admin_users')
+
+    import secrets
+    new_password = secrets.token_urlsafe(9)  # readable-ish, ~12 chars
+    target.set_password(new_password)
+    target.save(update_fields=['password'])
+
+    create_audit_log(
+        user=request.user,
+        action='password_reset_by_admin',
+        target_type='user',
+        target_id=target.id,
+        ip_address=_get_ip(request),
+    )
+
+    return render(
+        request,
+        'web/admin_password_reset_result.html',
+        {'target_user': target, 'new_password': new_password},
     )
 
 
@@ -655,10 +697,12 @@ def admin_user_update_view(request, user_id):
             max_bet_raw = request.POST.get('max_bet_amount', '').strip()
             commission_raw = request.POST.get('commission_rate', '').strip()
             is_betting_enabled = request.POST.get('is_betting_enabled') == 'on'
-            phone_number = request.POST.get('phone_number', '').strip()
 
             user.role = new_role
-            user.phone_number = phone_number
+            if request.user.is_superuser:
+                # Phone number is personal contact info - only the actual
+                # superuser (platform owner) may view/edit it.
+                user.phone_number = request.POST.get('phone_number', '').strip()
 
             if is_full_admin:
                 # Only a full admin may reassign which master/agent a user reports to.
@@ -718,6 +762,7 @@ def admin_user_update_view(request, user_id):
                     'possible_parents': possible_parents,
                     'allowed_roles': allowed_roles,
                     'can_edit_parent': is_full_admin,
+                    'can_view_sensitive': request.user.is_superuser,
                 },
             )
 
@@ -729,6 +774,7 @@ def admin_user_update_view(request, user_id):
             'possible_parents': possible_parents,
             'allowed_roles': allowed_roles,
             'can_edit_parent': is_full_admin,
+            'can_view_sensitive': request.user.is_superuser,
         },
     )
 

@@ -8,6 +8,12 @@
     {% else %}
         <p>
             <a class="btn" href="{% url 'web:admin_user_edit' view_user.id %}">Edit role / limits</a>
+            {% if can_view_sensitive %}
+                <form method="post" action="{% url 'web:admin_reset_user_password' view_user.id %}" style="display:inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn" onclick="return confirm('Generate a new password for this user? Their old password will stop working immediately.');">Reset password</button>
+                </form>
+            {% endif %}
             <a class="btn" href="{% url 'web:admin_users' %}">&larr; Back to all users</a>
         </p>
 
@@ -19,10 +25,12 @@
             <span>Joined</span>
             <strong>{{ view_user.date_joined|date:"Y-m-d H:i" }}</strong>
         </div>
-        <div class="stat-card">
-            <span>Phone number</span>
-            <strong>{{ view_user.phone_number|default:"&mdash;" }}</strong>
-        </div>
+        {% if can_view_sensitive %}
+            <div class="stat-card">
+                <span>Phone number</span>
+                <strong>{{ view_user.phone_number|default:"&mdash;" }}</strong>
+            </div>
+        {% endif %}
         <div class="stat-card">
             <span>Wallet balance</span>
             <strong>{{ wallet.balance }}</strong>
