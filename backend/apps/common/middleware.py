@@ -1,5 +1,6 @@
 import zoneinfo
 
+from django.conf import settings
 from django.utils import timezone
 
 PAKISTAN_TZ = zoneinfo.ZoneInfo('Asia/Karachi')
@@ -41,4 +42,30 @@ class TimezoneMiddleware:
 
         response = self.get_response(request)
         timezone.deactivate()
+        return response
+
+
+class NoBrowserCacheMiddleware:
+    """
+    Every page here is session-dependent (shows whichever account is
+    currently logged in). Without explicit no-cache headers, browsers can
+    serve a stale snapshot from their "back/forward cache" when a user hits
+    Back - e.g. showing a previously-logged-in user's page after switching
+    to a different account, even though the real session has already
+    changed. This forces the browser to always re-check with the server
+    instead of showing a cached page from memory.
+
+    Static files (served under STATIC_URL, e.g. /static/...) are
+    deliberately excluded - those aren't session-dependent and should stay
+    cacheable for performance.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if not request.path.startswith(settings.STATIC_URL):
+            response['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
+            response['Pragma'] = 'no-cache'
         return response
