@@ -117,6 +117,105 @@ def create_withdrawal_request(user, amount: Decimal, address: str, currency: str
     return payment
 
 
+def initiate_manual_payout(payment_id: int, email: str, password: str) -> dict:
+    """
+    Admin-initiated payout, step 1 of 2 (see also confirm_manual_payout).
+
+    NOWPayments requires human-in-the-loop 2FA for every payout batch - this
+    cannot be fully automated away (nor should it be; that's their security
+    control, not a gap in this codebase - see docs/goal.txt discussion).
+    This function logs into NOWPayments with the admin-supplied email and
+    password (used only in-memory for this call - never written to the
+    database, a file, or a log line) to get a short-lived JWT, then asks
+    NOWPayments to create the payout batch for this specific withdrawal.
+
+    Returns the JWT and batch id so the view can hold them (session-only,
+    never persisted) just long enough for the admin to enter the 2FA code
+    in confirm_manual_payout - NOWPayments' JWTs expire in ~5 minutes.
+    """
+    from .providers import NOWPaymentsProvider
+
+    try:
+        payment = CryptoPayment.objects.get(
+            pk=payment_id,
+            payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
+            status=CryptoPayment.Status.PENDING,
+        )
+    except CryptoPayment.DoesNotExist:
+        raise ValidationError('Pending withdrawal not found.')
+
+    provider = get_payment_provider()
+    if not isinstance(provider, NOWPaymentsProvider):
+        raise ValidationError(
+            'Manual payout processing requires PAYMENT_PROVIDER=nowpayments.'
+        )
+
+    try:
+        jwt_token = provider.authenticate(email, password)
+    except Exception as exc:
+        raise ValidationError(f'NOWPayments login failed: {exc}')
+
+    try:
+        result = provider.create_withdrawal(
+            user=payment.user,
+            amount=payment.amount,
+            address=payment.address,
+            currency=payment.currency,
+            external_id=payment.external_id,
+            jwt_token=jwt_token,
+        )
+    except Exception as exc:
+        raise ValidationError(f'Could not create the payout batch: {exc}')
+
+    batch_id = str(result.get('batch_withdrawal_id') or result.get('external_id') or '')
+    if not batch_id:
+        raise ValidationError('NOWPayments did not return a batch id for this payout.')
+
+    payment.provider = result.get('provider', provider.name)
+    payment.external_id = batch_id
+    payment.save(update_fields=['provider', 'external_id', 'updated_at'])
+
+    return {'batch_id': batch_id, 'jwt_token': jwt_token, 'payment_id': payment.id}
+
+
+def confirm_manual_payout(payment_id: int, batch_id: str, verification_code: str, jwt_token: str) -> CryptoPayment:
+    """
+    Admin-initiated payout, step 2 of 2: confirm the batch with the 2FA code
+    NOWPayments requires. The JWT here is the one obtained in
+    initiate_manual_payout moments earlier - it is never stored anywhere
+    beyond the admin's own session between these two steps.
+    """
+    from .providers import NOWPaymentsProvider
+
+    try:
+        payment = CryptoPayment.objects.get(
+            pk=payment_id,
+            payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
+        )
+    except CryptoPayment.DoesNotExist:
+        raise ValidationError('Withdrawal not found.')
+
+    provider = get_payment_provider()
+    if not isinstance(provider, NOWPaymentsProvider):
+        raise ValidationError(
+            'Manual payout processing requires PAYMENT_PROVIDER=nowpayments.'
+        )
+
+    try:
+        provider.verify_payout(batch_id, verification_code, jwt_token)
+    except Exception as exc:
+        # A non-2xx response from NOWPayments means the code was wrong, the
+        # JWT expired (they last ~5 minutes), or the batch was rejected.
+        # Leave the payment PENDING - the admin can retry with a fresh code,
+        # or NOWPayments' own dashboard is always the fallback to check on
+        # or complete this payout manually.
+        raise ValidationError(f'Payout verification failed: {exc}')
+
+    payment.status = CryptoPayment.Status.COMPLETED
+    payment.save(update_fields=['status', 'updated_at'])
+    return payment
+
+
 def handle_deposit_success(external_id: str) -> CryptoPayment:
     """
     Called by the payment webhook when a deposit is confirmed.

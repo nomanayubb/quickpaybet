@@ -1,0 +1,54 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Withdrawal Requests</h1>
+
+    {% if not nowpayments_active %}
+        <p class="error">
+            The active payment provider is "mock", not NOWPayments. Manual payout
+            processing below only works when <code>PAYMENT_PROVIDER=nowpayments</code>
+            is set. Until then, "Process" will show an error.
+        </p>
+    {% endif %}
+
+    <h3>Pending ({{ pending|length }})</h3>
+    <table>
+        <thead>
+            <tr><th>User</th><th>Amount</th><th>Currency</th><th>Address</th><th>Requested</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for payment in pending %}
+                <tr>
+                    <td>{{ payment.user.email }}</td>
+                    <td>{{ payment.amount }}</td>
+                    <td>{{ payment.currency }}</td>
+                    <td><code>{{ payment.address }}</code></td>
+                    <td>{{ payment.created_at }}</td>
+                    <td><a class="btn" href="{% url 'web:admin_withdrawal_process' payment.id %}">Process</a></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6">No pending withdrawals.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h3>Recent (last 20)</h3>
+    <table>
+        <thead>
+            <tr><th>User</th><th>Amount</th><th>Currency</th><th>Status</th><th>Updated</th></tr>
+        </thead>
+        <tbody>
+            {% for payment in recent %}
+                <tr>
+                    <td>{{ payment.user.email }}</td>
+                    <td>{{ payment.amount }}</td>
+                    <td>{{ payment.currency }}</td>
+                    <td>{{ payment.status }}</td>
+                    <td>{{ payment.updated_at }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5">No processed withdrawals yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

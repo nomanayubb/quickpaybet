@@ -78,7 +78,7 @@ class NOWPaymentsProvider(BasePaymentProvider):
             'x-api-key': self.api_key,
         }
 
-    def _post(self, path: str, payload: dict) -> dict:
+    def _post(self, path: str, payload: dict, headers: dict | None = None) -> dict:
         if not self.api_key:
             raise RuntimeError(
                 'NOWPAYMENTS_API_KEY is not configured. '
@@ -88,7 +88,7 @@ class NOWPaymentsProvider(BasePaymentProvider):
         request = Request(
             self.base_url + path,
             data=json.dumps(payload).encode('utf-8'),
-            headers=self._headers(),
+            headers=headers if headers is not None else self._headers(),
             method='POST',
         )
         try:
@@ -99,6 +99,47 @@ class NOWPaymentsProvider(BasePaymentProvider):
             raise RuntimeError(
                 f'NOWPayments HTTP {exc.code}: {body}'
             )
+
+    def authenticate(self, email: str, password: str) -> str:
+        """
+        POST /v1/auth (no x-api-key header for this call) -> {"token": "<jwt>"}.
+        The JWT is valid for ~5 minutes and is required (as a Bearer header,
+        alongside x-api-key) to call /v1/payout and its /verify endpoint.
+
+        The caller is responsible for never persisting `email`/`password` -
+        they must only ever be used in-memory for this one call. This method
+        does not store them either.
+        """
+        request = Request(
+            self.base_url + '/auth',
+            data=json.dumps({'email': email, 'password': password}).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                result = json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            body = exc.read().decode('utf-8')
+            raise RuntimeError(f'NOWPayments auth failed (HTTP {exc.code}): {body}')
+
+        token = result.get('token')
+        if not token:
+            raise RuntimeError(f'NOWPayments auth response missing token: {result}')
+        return token
+
+    def verify_payout(self, batch_id: str, verification_code: str, jwt_token: str) -> dict:
+        """POST /v1/payout/<batch_id>/verify - confirms a payout batch with a 2FA code."""
+        headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': self.api_key,
+            'Authorization': f'Bearer {jwt_token}',
+        }
+        return self._post(
+            f'/payout/{batch_id}/verify',
+            {'verification_code': verification_code},
+            headers=headers,
+        )
 
     def create_deposit(self, user, amount: Decimal, currency: str = 'USDT', external_id: str = '') -> dict:
         if not external_id:
@@ -131,53 +172,61 @@ class NOWPaymentsProvider(BasePaymentProvider):
             'payload': result,
         }
 
-    def create_withdrawal(self, user, amount: Decimal, address: str, currency: str = 'USDT', external_id: str = '') -> dict:
+    def create_withdrawal(self, user, amount: Decimal, address: str, currency: str = 'USDT', external_id: str = '', jwt_token: str | None = None) -> dict:
         """
         NOWPayments payouts (mass withdrawal / /v1/payout).
 
-        IMPORTANT / NOT YET LIVE-VERIFIED: NOWPayments' real payout endpoint
-        requires a JWT bearer token obtained via a separate email+password+2FA
-        login flow (/v1/auth), not the simple `x-api-key` header used for
-        deposits. That JWT/2FA flow is not implemented in this codebase yet —
-        it needs the client's real NOWPayments account credentials and a 2FA
-        device to build and test properly (tracked in `client tasks.md`).
+        NOWPayments' real payout endpoint requires BOTH the x-api-key header
+        AND a JWT bearer token obtained via a separate email+password login
+        (/v1/auth) - confirmed against NOWPayments' own official SDK source.
+        The automatic withdrawal path (apps.payments.services.create_withdrawal_request)
+        never has a JWT (no password is ever stored), so it correctly fails
+        here and the wallet gets refunded - this is intentional, not a bug.
 
-        Until that is built, this method makes a best-effort call using the
-        api-key header. If NOWPayments rejects it (most likely, given the
-        auth mismatch above), this raises — the caller
-        (`apps.payments.services.create_withdrawal_request`) already treats a
-        raised exception as "provider could not process this" and refunds
-        the user's wallet. It must never fabricate a success response.
+        The admin-initiated manual payout flow
+        (apps.payments.services.initiate_manual_payout) obtains a short-lived
+        JWT at the time an admin enters their NOWPayments password (never
+        stored) and passes it in here as `jwt_token`.
         """
         if not external_id:
             external_id = f"wd_{uuid.uuid4().hex}"
 
+        callback_url = os.getenv(
+            'NOWPAYMENTS_IPN_CALLBACK_URL',
+            'http://YOUR_DOMAIN/api/payments/webhook/',
+        )
         payload = {
-            'ipn_callback_url': os.getenv(
-                'NOWPAYMENTS_IPN_CALLBACK_URL',
-                'http://YOUR_DOMAIN/api/payments/webhook/',
-            ),
+            'ipn_callback_url': callback_url,
             'withdrawals': [
                 {
                     'address': address,
                     'currency': currency.lower(),
                     'amount': str(amount),
-                    'ipn_callback_url': os.getenv(
-                        'NOWPAYMENTS_IPN_CALLBACK_URL',
-                        'http://YOUR_DOMAIN/api/payments/webhook/',
-                    ),
+                    'ipn_callback_url': callback_url,
                 }
             ],
         }
 
-        result = self._post('/payout', payload)
+        headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': self.api_key,
+        }
+        if jwt_token:
+            headers['Authorization'] = f'Bearer {jwt_token}'
+
+        result = self._post('/payout', payload, headers=headers)
+
+        withdrawals = result.get('withdrawals') or []
+        first = withdrawals[0] if withdrawals else {}
 
         return {
             'external_id': str(result.get('id', external_id)),
+            'batch_withdrawal_id': result.get('id'),
             'provider': self.name,
-            # Real payouts sit in a provider-side approval queue; never report
-            # anything other than pending unless the provider response says so.
-            'status': str(result.get('status', 'pending')).lower(),
+            # Real payouts require 2FA verification before they actually
+            # move funds; never report anything other than pending unless
+            # the provider response explicitly says otherwise.
+            'status': str(first.get('status', 'pending')).lower(),
             'payload': result,
         }
 

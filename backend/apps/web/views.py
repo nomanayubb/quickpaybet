@@ -28,7 +28,13 @@ from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
 from apps.payments.models import CryptoPayment
 from apps.payments.providers import get_payment_provider
-from apps.payments.services import create_deposit, create_withdrawal_request, handle_deposit_success
+from apps.payments.services import (
+    create_deposit,
+    create_withdrawal_request,
+    handle_deposit_success,
+    initiate_manual_payout,
+    confirm_manual_payout,
+)
 from apps.reports.services import get_overview_report, get_daily_report, get_sport_report, get_user_report, get_match_report
 
 # Service functions in apps.bets / apps.wallet / apps.payments raise DRF's
@@ -400,6 +406,129 @@ def admin_cancel_match_view(request, match_id):
     )
 
     return redirect('web:admin_matches')
+
+
+def admin_withdrawals_view(request):
+    """
+    Lists withdrawal requests for an admin to process. Real crypto payouts
+    always require a NOWPayments 2FA code per batch (their security design,
+    not something this codebase can or should bypass) - see
+    admin_withdrawal_process_view for that flow.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    pending = CryptoPayment.objects.filter(
+        payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
+        status=CryptoPayment.Status.PENDING,
+    ).select_related('user').order_by('-created_at')
+
+    recent = CryptoPayment.objects.filter(
+        payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
+    ).exclude(status=CryptoPayment.Status.PENDING).select_related('user').order_by('-updated_at')[:20]
+
+    return render(
+        request,
+        'web/admin_withdrawals.html',
+        {
+            'pending': pending,
+            'recent': recent,
+            'nowpayments_active': get_payment_provider().name == 'nowpayments',
+            'active': 'admin_withdrawals',
+        },
+    )
+
+
+def admin_withdrawal_process_view(request, payment_id):
+    """
+    Two-step manual payout flow for one withdrawal:
+      step=login  -> admin enters their NOWPayments email+password directly
+                     into this form (never sent to or stored by anyone but
+                     NOWPayments itself); we exchange it for a short-lived
+                     JWT and create the payout batch.
+      step=verify -> NOWPayments requires a 2FA code to actually release the
+                     payout; the JWT from step 1 is held only in this
+                     admin's own server-side session, only until this step
+                     completes or the session key is cleared.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    payment = get_object_or_404(
+        CryptoPayment,
+        pk=payment_id,
+        payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
+    )
+
+    session_key = f'payout_session_{payment_id}'
+    session_data = request.session.get(session_key)
+    error = None
+
+    if request.method == 'POST':
+        step = request.POST.get('step')
+
+        if step == 'login':
+            email = request.POST.get('email', '').strip()
+            password = request.POST.get('password', '')
+            if not email or not password:
+                error = 'Email and password are required.'
+            else:
+                try:
+                    result = initiate_manual_payout(
+                        payment_id=payment.id, email=email, password=password,
+                    )
+                    request.session[session_key] = {
+                        'batch_id': result['batch_id'],
+                        'jwt_token': result['jwt_token'],
+                    }
+                    session_data = request.session[session_key]
+                    create_audit_log(
+                        user=request.user,
+                        action='payout_batch_created',
+                        target_type='crypto_payment',
+                        target_id=payment.id,
+                        metadata={'batch_id': result['batch_id']},
+                        ip_address=_get_ip(request),
+                    )
+                except SERVICE_ERRORS as exc:
+                    error = _error_message(exc)
+            # `password` deliberately goes out of scope here and is never
+            # referenced again - nothing beyond this request holds it.
+
+        elif step == 'verify':
+            code = request.POST.get('verification_code', '').strip()
+            if not session_data:
+                error = 'This session expired (NOWPayments codes/tokens are short-lived) - please log in again.'
+            else:
+                try:
+                    confirm_manual_payout(
+                        payment_id=payment.id,
+                        batch_id=session_data['batch_id'],
+                        verification_code=code,
+                        jwt_token=session_data['jwt_token'],
+                    )
+                    del request.session[session_key]
+                    create_audit_log(
+                        user=request.user,
+                        action='payout_verified',
+                        target_type='crypto_payment',
+                        target_id=payment.id,
+                        ip_address=_get_ip(request),
+                    )
+                    return redirect('web:admin_withdrawals')
+                except SERVICE_ERRORS as exc:
+                    error = _error_message(exc)
+
+    return render(
+        request,
+        'web/admin_withdrawal_process.html',
+        {
+            'payment': payment,
+            'awaiting_2fa': bool(session_data),
+            'error': error,
+            'active': 'admin_withdrawals',
+        },
+    )
 
 
 def admin_audit_logs_view(request):

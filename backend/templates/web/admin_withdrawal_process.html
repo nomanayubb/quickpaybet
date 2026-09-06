@@ -1,0 +1,55 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Process Withdrawal</h1>
+
+    <p>
+        <strong>{{ payment.user.email }}</strong> requested
+        <strong>{{ payment.amount }} {{ payment.currency }}</strong>
+        to <code>{{ payment.address }}</code>.
+    </p>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    {% if not awaiting_2fa %}
+        <h3>Step 1: Log in to NOWPayments</h3>
+        <p>
+            This goes directly from your browser to this site's own server, which
+            forwards it straight to NOWPayments to get a temporary access token —
+            it is never saved anywhere, and this page never sends it anywhere else.
+        </p>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="step" value="login">
+            <div class="form-group">
+                <label>NOWPayments email</label>
+                <input type="email" name="email" required autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label>NOWPayments password</label>
+                <input type="password" name="password" required autocomplete="off">
+            </div>
+            <button type="submit" class="btn">Log in &amp; create payout</button>
+        </form>
+    {% else %}
+        <h3>Step 2: Enter the 2FA code</h3>
+        <p>
+            NOWPayments requires a 2FA code to release this specific payout — check
+            your authenticator app. This step must be completed within a few
+            minutes, or the login will expire and you'll need to restart.
+        </p>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="step" value="verify">
+            <div class="form-group">
+                <label>6-digit code</label>
+                <input type="text" name="verification_code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="off">
+            </div>
+            <button type="submit" class="btn">Confirm payout</button>
+        </form>
+    {% endif %}
+
+    <p><a href="{% url 'web:admin_withdrawals' %}">&larr; Back to withdrawals</a></p>
+{% endblock %}
