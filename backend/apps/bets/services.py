@@ -7,6 +7,16 @@ from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
 from .models import Bet, ParlayBet, ParlayLeg
 
+# ParlayBet.total_odds is a DecimalField(max_digits=10, decimal_places=2),
+# i.e. a hard ceiling of 99,999,999.99. Multiplying many legs' odds together
+# can exceed that easily (confirmed: 30 legs at 2.00 odds already overflows
+# by several orders of magnitude). Cap both the leg count and the resulting
+# combined odds so this is rejected with a clear message instead of either
+# silently storing a wrong value (SQLite) or crashing with a database
+# overflow error (PostgreSQL).
+MAX_PARLAY_LEGS = 12
+MAX_COMBINED_ODDS = Decimal('999999.99')
+
 
 def _get_bet_odds(match: Match, selection: str) -> Decimal:
     odds_map = {
@@ -169,6 +179,8 @@ def place_parlay_bet(user, stake: Decimal, selections: list):
 
     if len(selections) < 2:
         raise ValidationError('A parlay bet requires at least two selections.')
+    if len(selections) > MAX_PARLAY_LEGS:
+        raise ValidationError(f'A parlay bet cannot have more than {MAX_PARLAY_LEGS} selections.')
 
     validated_legs = []
     combined_odds = Decimal('1.00')
@@ -193,6 +205,16 @@ def place_parlay_bet(user, stake: Decimal, selections: list):
 
         odds = _get_bet_odds(match, selection)
         combined_odds *= odds
+        if combined_odds > MAX_COMBINED_ODDS:
+            # Belt-and-braces on top of MAX_PARLAY_LEGS: a handful of
+            # high-odds legs can overflow ParlayBet.total_odds
+            # (max_digits=10) just as easily as many low-odds ones would.
+            # PostgreSQL raises a hard DataError on overflow; SQLite silently
+            # truncates/stores a wrong value instead - neither is acceptable
+            # for a bet amount, so this is checked before anything is saved.
+            raise ValidationError(
+                'Combined odds for this parlay are too high to place.'
+            )
         validated_legs.append((match, selection, odds))
 
     with transaction.atomic():
