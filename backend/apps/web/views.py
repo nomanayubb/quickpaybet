@@ -445,6 +445,95 @@ def admin_withdrawals_view(request):
     )
 
 
+def admin_exchange_dashboard_view(request):
+    """
+    Read-only overview of exchange (back/lay) activity: summary stats,
+    currently open orders, and matched fills. This is the custom-branded
+    /panel/ equivalent of what Django's built-in /admin/ already exposes for
+    ExchangeOrder/ExchangeFill (see apps/exchange/admin.py) - editing the
+    commission rate still happens there; this page is purely for visibility
+    inside the site's own admin experience. Adds no new wallet mutations.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    from django.db.models import Sum
+
+    since_7d = timezone.now() - timedelta(days=7)
+    settled_fills = ExchangeFill.objects.filter(
+        status__in=[ExchangeFill.Status.BACK_WON, ExchangeFill.Status.LAY_WON]
+    )
+    stats = {
+        'commission_all_time': settled_fills.aggregate(s=Sum('commission_amount'))['s'] or Decimal('0'),
+        'commission_7d': settled_fills.filter(created_at__gte=since_7d).aggregate(s=Sum('commission_amount'))['s'] or Decimal('0'),
+        'open_orders_count': ExchangeOrder.objects.filter(status=ExchangeOrder.Status.OPEN).count(),
+        'exposure_locked': Wallet.objects.aggregate(s=Sum('reserved_balance'))['s'] or Decimal('0'),
+        'fills_settled_count': settled_fills.count(),
+        'matched_volume_all_time': ExchangeFill.objects.aggregate(s=Sum('stake'))['s'] or Decimal('0'),
+    }
+
+    # --- Open Orders box ---
+    orders_q = request.GET.get('orders_q', '').strip()
+    orders_side = request.GET.get('orders_side', '').strip()
+    orders_status = request.GET.get('orders_status', ExchangeOrder.Status.OPEN).strip()
+
+    orders_qs = ExchangeOrder.objects.select_related('user', 'match').order_by('-created_at')
+    if orders_q:
+        orders_qs = orders_qs.filter(user__email__icontains=orders_q)
+    if orders_side:
+        orders_qs = orders_qs.filter(side=orders_side)
+    if orders_status:
+        orders_qs = orders_qs.filter(status=orders_status)
+
+    orders_paginator = Paginator(orders_qs, 20)
+    orders_page = orders_paginator.get_page(request.GET.get('orders_page'))
+
+    # --- Matched Fills box ---
+    fills_status = request.GET.get('fills_status', '').strip()
+    fills_selection = request.GET.get('fills_selection', '').strip()
+    fills_date_from = request.GET.get('fills_date_from', '').strip()
+    fills_date_to = request.GET.get('fills_date_to', '').strip()
+
+    fills_qs = ExchangeFill.objects.select_related(
+        'match', 'back_order__user', 'lay_order__user'
+    ).order_by('-created_at')
+    if fills_status:
+        fills_qs = fills_qs.filter(status=fills_status)
+    if fills_selection:
+        fills_qs = fills_qs.filter(selection=fills_selection)
+    fills_from_dt = _parse_pkt_date_bound(fills_date_from)
+    fills_to_dt = _parse_pkt_date_bound(fills_date_to, end_of_day=True)
+    if fills_from_dt:
+        fills_qs = fills_qs.filter(created_at__gte=fills_from_dt)
+    if fills_to_dt:
+        fills_qs = fills_qs.filter(created_at__lte=fills_to_dt)
+
+    fills_paginator = Paginator(fills_qs, 20)
+    fills_page = fills_paginator.get_page(request.GET.get('fills_page'))
+
+    return render(
+        request,
+        'web/admin_exchange.html',
+        {
+            'stats': stats,
+            'orders_page': orders_page,
+            'orders_q': orders_q,
+            'orders_side': orders_side,
+            'orders_status': orders_status,
+            'fills_page': fills_page,
+            'fills_status': fills_status,
+            'fills_selection': fills_selection,
+            'fills_date_from': fills_date_from,
+            'fills_date_to': fills_date_to,
+            'order_side_choices': ExchangeOrder.Side.choices,
+            'order_status_choices': ExchangeOrder.Status.choices,
+            'fill_status_choices': ExchangeFill.Status.choices,
+            'selection_choices': Bet.Selection.choices,
+            'active': 'admin_exchange',
+        },
+    )
+
+
 def admin_withdrawal_process_view(request, payment_id):
     """
     Two-step manual payout flow for one withdrawal:

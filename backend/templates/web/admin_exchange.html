@@ -1,0 +1,151 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Exchange Dashboard</h1>
+    <p style="color:#555;">
+        Commission rate is set in <a href="/admin/exchange/exchangeconfig/1/change/">Django admin</a>.
+        This page is read-only.
+    </p>
+
+    <div>
+        <div class="stat-card">
+            <span>Commission Earned (all-time)</span>
+            <strong>{{ stats.commission_all_time|floatformat:2 }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Commission Earned (last 7 days)</span>
+            <strong>{{ stats.commission_7d|floatformat:2 }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Currently Open Orders</span>
+            <strong>{{ stats.open_orders_count }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Exposure Locked (system-wide)</span>
+            <strong>{{ stats.exposure_locked|floatformat:2 }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Fills Settled (all-time)</span>
+            <strong>{{ stats.fills_settled_count }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Matched Volume (all-time)</span>
+            <strong>{{ stats.matched_volume_all_time|floatformat:2 }}</strong>
+        </div>
+    </div>
+
+    <h2 style="margin-top:32px;">Open Orders</h2>
+    <form method="get" style="margin-bottom: 12px;">
+        <input type="hidden" name="fills_status" value="{{ fills_status }}">
+        <input type="hidden" name="fills_selection" value="{{ fills_selection }}">
+        <input type="hidden" name="fills_date_from" value="{{ fills_date_from }}">
+        <input type="hidden" name="fills_date_to" value="{{ fills_date_to }}">
+        <input type="text" name="orders_q" value="{{ orders_q }}" placeholder="Search by user email">
+        <select name="orders_side">
+            <option value="">Any side</option>
+            {% for value, label in order_side_choices %}
+                <option value="{{ value }}" {% if orders_side == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <select name="orders_status">
+            <option value="">Any status</option>
+            {% for value, label in order_status_choices %}
+                <option value="{{ value }}" {% if orders_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_exchange' %}">Reset</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>User</th><th>Match</th><th>Selection</th><th>Side</th><th>Odds</th><th>Stake</th><th>Matched</th><th>Unmatched</th><th>Status</th><th>Date</th></tr>
+        </thead>
+        <tbody>
+            {% for order in orders_page %}
+                <tr>
+                    <td>{{ order.user.email }}</td>
+                    <td><a href="{% url 'web:match_detail' order.match_id %}">{{ order.match.home_team }} v {{ order.match.away_team }}</a></td>
+                    <td>{{ order.selection }}</td>
+                    <td>{{ order.side }}</td>
+                    <td>{{ order.odds }}</td>
+                    <td>{{ order.stake }}</td>
+                    <td>{{ order.matched_stake }}</td>
+                    <td>{{ order.unmatched_stake }}</td>
+                    <td>{{ order.status }}</td>
+                    <td>{{ order.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="10">No orders match this search.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if orders_page.has_previous or orders_page.has_next %}
+        <div style="margin-top: 12px;">
+            {% if orders_page.has_previous %}
+                <a class="btn" href="?orders_page={{ orders_page.previous_page_number }}&orders_q={{ orders_q }}&orders_side={{ orders_side }}&orders_status={{ orders_status }}&fills_status={{ fills_status }}&fills_selection={{ fills_selection }}&fills_date_from={{ fills_date_from }}&fills_date_to={{ fills_date_to }}">Previous</a>
+            {% endif %}
+            <span>Page {{ orders_page.number }} of {{ orders_page.paginator.num_pages }} ({{ orders_page.paginator.count }} total)</span>
+            {% if orders_page.has_next %}
+                <a class="btn" href="?orders_page={{ orders_page.next_page_number }}&orders_q={{ orders_q }}&orders_side={{ orders_side }}&orders_status={{ orders_status }}&fills_status={{ fills_status }}&fills_selection={{ fills_selection }}&fills_date_from={{ fills_date_from }}&fills_date_to={{ fills_date_to }}">Next</a>
+            {% endif %}
+        </div>
+    {% endif %}
+
+    <h2 style="margin-top:32px;">Matched Fills</h2>
+    <form method="get" style="margin-bottom: 12px;">
+        <input type="hidden" name="orders_q" value="{{ orders_q }}">
+        <input type="hidden" name="orders_side" value="{{ orders_side }}">
+        <input type="hidden" name="orders_status" value="{{ orders_status }}">
+        <select name="fills_status">
+            <option value="">Any status</option>
+            {% for value, label in fill_status_choices %}
+                <option value="{{ value }}" {% if fills_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <select name="fills_selection">
+            <option value="">Any selection</option>
+            {% for value, label in selection_choices %}
+                <option value="{{ value }}" {% if fills_selection == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        From <input type="date" name="fills_date_from" value="{{ fills_date_from }}">
+        To <input type="date" name="fills_date_to" value="{{ fills_date_to }}">
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_exchange' %}">Reset</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>Match</th><th>Selection</th><th>Back User</th><th>Lay User</th><th>Odds</th><th>Stake</th><th>Status</th><th>Commission</th><th>Date</th></tr>
+        </thead>
+        <tbody>
+            {% for fill in fills_page %}
+                <tr>
+                    <td><a href="{% url 'web:match_detail' fill.match_id %}">{{ fill.match.home_team }} v {{ fill.match.away_team }}</a></td>
+                    <td>{{ fill.selection }}</td>
+                    <td>{{ fill.back_order.user.email }}</td>
+                    <td>{{ fill.lay_order.user.email }}</td>
+                    <td>{{ fill.odds }}</td>
+                    <td>{{ fill.stake }}</td>
+                    <td>{{ fill.status }}</td>
+                    <td>{{ fill.commission_amount|default:"-" }}</td>
+                    <td>{{ fill.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="9">No fills match this search.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if fills_page.has_previous or fills_page.has_next %}
+        <div style="margin-top: 12px;">
+            {% if fills_page.has_previous %}
+                <a class="btn" href="?fills_page={{ fills_page.previous_page_number }}&fills_status={{ fills_status }}&fills_selection={{ fills_selection }}&fills_date_from={{ fills_date_from }}&fills_date_to={{ fills_date_to }}&orders_q={{ orders_q }}&orders_side={{ orders_side }}&orders_status={{ orders_status }}">Previous</a>
+            {% endif %}
+            <span>Page {{ fills_page.number }} of {{ fills_page.paginator.num_pages }} ({{ fills_page.paginator.count }} total)</span>
+            {% if fills_page.has_next %}
+                <a class="btn" href="?fills_page={{ fills_page.next_page_number }}&fills_status={{ fills_status }}&fills_selection={{ fills_selection }}&fills_date_from={{ fills_date_from }}&fills_date_to={{ fills_date_to }}&orders_q={{ orders_q }}&orders_side={{ orders_side }}&orders_status={{ orders_status }}">Next</a>
+            {% endif %}
+        </div>
+    {% endif %}
+{% endblock %}
