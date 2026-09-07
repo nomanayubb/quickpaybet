@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
+from django.http import JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
@@ -25,7 +26,7 @@ from apps.audit.models import AuditLog
 from apps.audit.services import create_audit_log
 from apps.bets.models import Bet, ParlayBet
 from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
-from apps.exchange.services import place_order as place_exchange_order, cancel_order as cancel_exchange_order, settle_exchange_for_match
+from apps.exchange.services import place_order as place_exchange_order, cancel_order as cancel_exchange_order, settle_exchange_for_match, cash_out_order, preview_cash_out
 from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.sports.models import Match, Sport, Tournament
 from apps.wallet.models import Wallet, WalletTransaction
@@ -1522,6 +1523,7 @@ def match_detail_view(request, pk):
             'order_book': get_order_book(match) if match.status in (Match.Status.SCHEDULED, Match.Status.LIVE) else None,
             'my_exchange_orders': my_exchange_orders,
             'exchange_error': request.GET.get('exchange_error', ''),
+            'exchange_message': request.GET.get('exchange_message', ''),
             'active': 'matches',
         },
     )
@@ -1561,6 +1563,13 @@ def _redirect_with_exchange_error(match_pk, message):
     return redirect(f'{url}?{urlencode({"exchange_error": message})}')
 
 
+def _redirect_with_exchange_message(match_pk, message):
+    """Same as _redirect_with_exchange_error, for non-error informational results (e.g. cash-out outcomes)."""
+    from urllib.parse import urlencode
+    url = reverse('web:match_detail', kwargs={'pk': match_pk})
+    return redirect(f'{url}?{urlencode({"exchange_message": message})}')
+
+
 @login_required
 @require_POST
 def exchange_place_order_view(request, pk):
@@ -1594,6 +1603,49 @@ def exchange_cancel_order_view(request, order_id):
     except SERVICE_ERRORS:
         pass
     return redirect('web:match_detail', pk=order.match_id)
+
+
+@login_required
+def exchange_cash_out_preview_view(request, order_id):
+    """
+    Read-only JSON estimate for the live-updating Cash Out button label.
+    Never trusted for execution - exchange_cash_out_view always recomputes
+    fresh against the real book at the moment of the click.
+    """
+    order = get_object_or_404(ExchangeOrder, pk=order_id, user=request.user)
+    result = preview_cash_out(order)
+    estimated_value = result.get('estimated_value')
+    return JsonResponse({
+        'status': result['status'],
+        'estimated_value': f'{estimated_value:.2f}' if estimated_value is not None else None,
+    })
+
+
+@login_required
+@require_POST
+def exchange_cash_out_view(request, order_id):
+    order = get_object_or_404(ExchangeOrder, pk=order_id, user=request.user)
+    try:
+        result = cash_out_order(user=request.user, order_id=order.id)
+    except SERVICE_ERRORS as exc:
+        return _redirect_with_exchange_error(order.match_id, _error_message(exc))
+
+    if result['status'] == 'full':
+        # "Estimated", not "guaranteed": commission is charged per-bet, not
+        # on a user's net result for the match, so the exact amount can
+        # differ slightly (by a few percent of the commission rate) depending
+        # on which way the match actually goes - see Section 11 rule 20.
+        message = f"Cashed out for an estimated {result['estimated_value']:.2f}."
+    elif result['status'] == 'partial':
+        message = (
+            f"Partially cashed out {result['matched_amount']:.2f} of your {order.matched_stake:.2f} stake "
+            f"- the rest of your bet is still live and depends on the match result. "
+            f"You can try cashing out the remainder again later."
+        )
+    else:
+        message = "No cash-out liquidity available right now. Try again shortly."
+
+    return _redirect_with_exchange_message(order.match_id, message)
 
 
 @login_required

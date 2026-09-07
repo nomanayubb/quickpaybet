@@ -253,6 +253,238 @@ def _void_fill(fill_id: int) -> None:
         fill.save(update_fields=['status'])
 
 
+def _cash_out_target_notional(order: ExchangeOrder) -> Decimal:
+    """
+    The Σ(stake*odds) an opposing order must accumulate, walking the book
+    best-price-first, to make `order`'s combined P&L identical whether the
+    match result favours it or not. Same formula for both sides - the sum
+    term is a back order's profit-if-win, or a lay order's liability-if-
+    happens, but it's the same arithmetic (stake*(odds-1)) either way.
+    See docs/PROJECT_MASTER_DOCUMENTATION rule 20 for the derivation.
+    """
+    if order.side == ExchangeOrder.Side.BACK:
+        fills = ExchangeFill.objects.filter(back_order=order, status=ExchangeFill.Status.PENDING)
+    else:
+        fills = ExchangeFill.objects.filter(lay_order=order, status=ExchangeFill.Status.PENDING)
+    stake_odds_sum = sum((f.stake * (f.odds - 1) for f in fills), Decimal('0'))
+    return order.matched_stake + stake_odds_sum
+
+
+def _resting_book_for_cash_out(order: ExchangeOrder, new_leg_side: str, locked: bool):
+    """
+    The resting orders a new cash-out leg (side=new_leg_side, always the
+    OPPOSITE of order.side) will actually match against - i.e. resting
+    orders on `order`'s OWN side (other backers if `order` is a back, other
+    layers if `order` is a lay). Uses the exact same filter/ordering
+    _match_order() applies for an order of side=new_leg_side, so whatever
+    this walks is exactly what will later match. `locked=True` for real
+    execution (must be called inside an atomic() block); `locked=False` for
+    a read-only preview.
+    """
+    qs = ExchangeOrder.objects.select_for_update() if locked else ExchangeOrder.objects
+    qs = qs.filter(
+        match=order.match,
+        selection=order.selection,
+        side=order.side,
+        status=ExchangeOrder.Status.OPEN,
+    ).exclude(user=order.user)
+    if new_leg_side == ExchangeOrder.Side.LAY:
+        # A new lay leg matches resting backs where back.odds <= its own
+        # price, best (lowest) price first - see _match_order().
+        return qs.order_by('odds', 'created_at')
+    return qs.order_by('-odds', 'created_at')
+
+
+def _simulate_cash_out_walk(target_notional: Decimal, resting_qs) -> dict:
+    """
+    Walks resting_qs (already correctly filtered/ordered/locked-or-not by
+    the caller), taking the full available stake at each price level, until
+    a level has more than what's needed - at which point it takes only the
+    EXACT fraction of that final level needed to make the accumulated
+    notional land precisely on target_notional, never past it.
+
+    This precision matters: overshooting the target (e.g. by taking a whole
+    extra level's worth of stake once the target is already exceeded) does
+    NOT just give a "better than promised" result - it breaks the equal-P&L
+    guarantee the whole cash-out depends on, introducing a real, potentially
+    large gross imbalance between the two possible match outcomes (proven
+    with concrete numbers in this module's tests). Landing exactly on the
+    target keeps the two outcomes equal (before commission - see Section 11
+    rule 20 for the smaller, unavoidable commission-only residual).
+
+    The returned `stake` is submitted as one order's total stake;
+    _match_order()'s existing min(unmatched, resting.unmatched) partial-fill
+    logic naturally consumes the fractional amount from the final level -
+    no special-cased partial-fill logic is needed here.
+    """
+    cumulative_notional = Decimal('0')
+    stake_needed = Decimal('0')
+    worst_odds = None
+    for resting in resting_qs:
+        available = resting.unmatched_stake
+        if available <= 0:
+            continue
+        level_notional = available * resting.odds
+        if cumulative_notional + level_notional >= target_notional:
+            remaining_notional = target_notional - cumulative_notional
+            partial_stake = (remaining_notional / resting.odds).quantize(Decimal('0.00000001'))
+            return {
+                'stake': stake_needed + partial_stake,
+                'worst_odds': resting.odds,
+                'target_notional': target_notional,
+                'reached_target': True,
+            }
+        cumulative_notional += level_notional
+        stake_needed += available
+        worst_odds = resting.odds
+    return {
+        'stake': stake_needed,
+        'worst_odds': worst_odds,
+        'target_notional': target_notional,
+        'reached_target': False,
+    }
+
+
+def _cash_out_guaranteed_value(order: ExchangeOrder, new_leg_stake: Decimal) -> Decimal:
+    """
+    Estimated net P&L delta a fully-reached cash-out locks in, beyond what's
+    already committed. This is the GROSS figure (equal in both outcomes
+    before commission) - deliberately called "estimated", not "guaranteed",
+    to callers: commission is charged per-fill on whichever bet happens to
+    win, not on a user's net result for the match, so once commission is
+    applied the two possible real outcomes can differ from this number (and
+    from each other) by a small amount whenever the cash-out's two fills
+    have different gross sizes (i.e. whenever the market moved between the
+    original bet and the cash-out). See Section 11 rule 20. NOT symmetric
+    between sides: a BACK order is closed by a LAY leg (value =
+    new_leg_stake - order.matched_stake), a LAY order is closed by a BACK
+    leg (value = order.matched_stake - new_leg_stake). Can be negative
+    (cashing out to cut a loss is a valid, expected use).
+    """
+    if order.side == ExchangeOrder.Side.BACK:
+        return new_leg_stake - order.matched_stake
+    return order.matched_stake - new_leg_stake
+
+
+def preview_cash_out(order: ExchangeOrder) -> dict:
+    """
+    Read-only estimate for display only - no locks, no mutation, never used
+    to actually move money. The real cash_out_order() always recomputes
+    fresh at execution time regardless of what this last returned.
+    """
+    if order.matched_stake <= 0:
+        return {'status': 'no_liquidity'}
+    opposite_side = ExchangeOrder.Side.LAY if order.side == ExchangeOrder.Side.BACK else ExchangeOrder.Side.BACK
+    target_notional = _cash_out_target_notional(order)
+    resting_qs = _resting_book_for_cash_out(order, opposite_side, locked=False)
+    walk = _simulate_cash_out_walk(target_notional, resting_qs)
+    if walk['worst_odds'] is None:
+        return {'status': 'no_liquidity'}
+    guaranteed_value = _cash_out_guaranteed_value(order, walk['stake']) if walk['reached_target'] else None
+    return {
+        'status': 'full' if walk['reached_target'] else 'partial',
+        'estimated_value': guaranteed_value,
+    }
+
+
+def cash_out_order(user, order_id: int) -> dict:
+    """
+    Closes out (fully or partially) an order's current matched position by
+    placing a real opposing order into the book, sized and priced to make
+    the owner's P&L identical regardless of the match result - matched
+    against genuine counterparties, never the house. Liquidity-dependent
+    like any real exchange: if the book can't fully absorb the needed
+    opposing stake, whatever it CAN absorb is cashed out (matching Betfair's
+    own front-end behaviour: partial match, immediate-or-cancel of whatever
+    doesn't fill) and the rest of the position stays live.
+    """
+    with transaction.atomic():
+        try:
+            order = ExchangeOrder.objects.select_for_update().get(pk=order_id, user=user)
+        except ExchangeOrder.DoesNotExist:
+            raise ValidationError('Order not found.')
+
+        if order.status != ExchangeOrder.Status.OPEN:
+            raise ValidationError('This order cannot be cashed out.')
+        if order.matched_stake <= 0:
+            raise ValidationError('Nothing matched on this order yet.')
+        if order.match.status not in (Match.Status.SCHEDULED, Match.Status.LIVE):
+            raise ValidationError('This match is no longer open for cash-out.')
+
+        opposite_side = ExchangeOrder.Side.LAY if order.side == ExchangeOrder.Side.BACK else ExchangeOrder.Side.BACK
+        target_notional = _cash_out_target_notional(order)
+
+        # Locking these rows now, before walking, guarantees what gets
+        # walked is exactly what _match_order() matches a moment later -
+        # no race with a concurrent order against the same book.
+        resting_qs = _resting_book_for_cash_out(order, opposite_side, locked=True)
+        walk = _simulate_cash_out_walk(target_notional, resting_qs)
+
+        if walk['worst_odds'] is None:
+            return {'status': 'no_liquidity', 'matched_amount': Decimal('0')}
+
+        stake_needed = walk['stake']
+        worst_odds = walk['worst_odds']
+        reached_target = walk['reached_target']
+
+        exposure = stake_needed * _exposure_rate(opposite_side, worst_odds)
+        wallet = Wallet.objects.select_for_update().get(user=user)
+        if wallet.available_balance < exposure:
+            # An adverse price move can require MORE exposure than the
+            # original position had reserved, not just less - cap to what's
+            # actually affordable rather than reject outright, same "give
+            # whatever is safely possible" philosophy used for liquidity.
+            # Capping here means the full target is no longer reached, even
+            # if the book itself had enough liquidity for it.
+            affordable_stake = (wallet.available_balance / _exposure_rate(opposite_side, worst_odds)).quantize(Decimal('0.00000001'))
+            stake_needed = max(Decimal('0'), min(stake_needed, affordable_stake))
+            exposure = stake_needed * _exposure_rate(opposite_side, worst_odds)
+            reached_target = False
+
+        if stake_needed <= 0:
+            return {'status': 'no_liquidity', 'matched_amount': Decimal('0')}
+
+        wallet.reserved_balance += exposure
+        wallet.save(update_fields=['reserved_balance', 'updated_at'])
+
+        cash_out_leg = ExchangeOrder.objects.create(
+            user=user,
+            match=order.match,
+            selection=order.selection,
+            side=opposite_side,
+            odds=worst_odds,
+            stake=stake_needed,
+        )
+        _match_order(cash_out_leg)
+
+        # A cash-out never leaves a new speculative resting order behind -
+        # cancel whatever didn't fill and release its exposure immediately.
+        leftover = cash_out_leg.unmatched_stake
+        if leftover > 0:
+            release = leftover * _exposure_rate(opposite_side, worst_odds)
+            wallet.reserved_balance -= release
+            wallet.save(update_fields=['reserved_balance', 'updated_at'])
+            cash_out_leg.status = ExchangeOrder.Status.CANCELLED
+            cash_out_leg.save(update_fields=['status', 'updated_at'])
+
+        matched_amount = cash_out_leg.matched_stake
+        if matched_amount <= 0:
+            status = 'no_liquidity'
+        elif matched_amount >= stake_needed and reached_target:
+            status = 'full'
+        else:
+            status = 'partial'
+
+        guaranteed_value = _cash_out_guaranteed_value(order, matched_amount) if status == 'full' else None
+
+        return {
+            'status': status,
+            'matched_amount': matched_amount,
+            'estimated_value': guaranteed_value,
+            'order': cash_out_leg,
+        }
+
+
 def get_order_book(match: Match, depth: int = 5) -> dict:
     """
     Aggregated open back/lay prices per selection, for display only (not

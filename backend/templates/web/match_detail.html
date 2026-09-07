@@ -51,6 +51,9 @@
         {% if exchange_error %}
             <p class="error">{{ exchange_error }}</p>
         {% endif %}
+        {% if exchange_message %}
+            <p class="pending-deposit">{{ exchange_message }}</p>
+        {% endif %}
 
         {% if not user.is_authenticated %}
             <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to back or lay this match.</p>
@@ -105,11 +108,37 @@
                                             <button type="submit" class="btn">Cancel remainder</button>
                                         </form>
                                     {% endif %}
+                                    {% if o.matched_stake > 0 %}
+                                        <form method="post" action="{% url 'web:exchange_cash_out' o.id %}" style="display:inline;">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn cash-out-btn" data-order-id="{{ o.id }}" data-preview-url="{% url 'web:exchange_cash_out_preview' o.id %}">Cash Out</button>
+                                        </form>
+                                    {% endif %}
                                 </td>
                             </tr>
                         {% endfor %}
                     </tbody>
                 </table>
+                <script>
+                    (function () {
+                        function labelFor(data) {
+                            if (data.status === 'full') { return 'Cash Out ≈ ' + data.estimated_value + ' (est.)'; }
+                            if (data.status === 'partial') { return 'Partial Cash Out available'; }
+                            return 'Cash Out (no liquidity)';
+                        }
+                        function refreshOne(btn) {
+                            fetch(btn.getAttribute('data-preview-url'))
+                                .then(function (r) { return r.json(); })
+                                .then(function (data) { btn.textContent = labelFor(data); })
+                                .catch(function () {});
+                        }
+                        function refreshAll() {
+                            document.querySelectorAll('.cash-out-btn').forEach(refreshOne);
+                        }
+                        refreshAll();
+                        setInterval(refreshAll, 5000);
+                    })();
+                </script>
             {% endif %}
         {% endif %}
     {% endif %}

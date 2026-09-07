@@ -37,6 +37,8 @@ from .views import (
     bet_history_view,
     exchange_place_order_view,
     exchange_cancel_order_view,
+    exchange_cash_out_view,
+    exchange_cash_out_preview_view,
     exchange_history_view,
 )
 
@@ -53,6 +55,8 @@ urlpatterns = [
     path('matches/<int:pk>/', match_detail_view, name='match_detail'),
     path('matches/<int:pk>/exchange/place/', exchange_place_order_view, name='exchange_place_order'),
     path('exchange/orders/<int:order_id>/cancel/', exchange_cancel_order_view, name='exchange_cancel_order'),
+    path('exchange/orders/<int:order_id>/cash-out/', exchange_cash_out_view, name='exchange_cash_out'),
+    path('exchange/orders/<int:order_id>/cash-out-preview/', exchange_cash_out_preview_view, name='exchange_cash_out_preview'),
     path('exchange/history/', exchange_history_view, name='exchange_history'),
     path('dashboard/', admin_dashboard_view, name='dashboard'),
     # NOTE: this custom admin section deliberately lives under `panel/`, not
