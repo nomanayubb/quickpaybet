@@ -29,6 +29,7 @@ from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_b
 from apps.exchange.services import place_order as place_exchange_order, cancel_order as cancel_exchange_order, settle_exchange_for_match, cash_out_order, preview_cash_out
 from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.cashback.models import CashbackCredit
+from apps.rewards.models import RewardPackage, UserRewardClaim
 from apps.sports.models import Match, Sport, Tournament
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
@@ -593,6 +594,111 @@ def admin_cashback_dashboard_view(request):
             'credit_status_choices': CashbackCredit.Status.choices,
             'active': 'admin_cashback',
         },
+    )
+
+
+def admin_rewards_view(request):
+    """List of admin-managed deposit-milestone reward packages."""
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    from django.db.models import Count
+
+    packages = RewardPackage.objects.annotate(claim_count=Count('claims')).order_by('deposit_threshold')
+
+    return render(
+        request,
+        'web/admin_rewards.html',
+        {
+            'packages': packages,
+            'active': 'admin_rewards',
+        },
+    )
+
+
+def admin_create_reward_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    error = None
+    if request.method == 'POST':
+        try:
+            name = request.POST.get('name', '').strip()
+            threshold_raw = request.POST.get('deposit_threshold', '').strip()
+            bonus_raw = request.POST.get('commission_rate_bonus', '').strip()
+
+            if not name:
+                raise ValidationError('Name is required.')
+            try:
+                threshold = Decimal(threshold_raw)
+            except InvalidOperation:
+                raise ValidationError('Deposit threshold must be a valid decimal number.')
+            if threshold <= 0:
+                raise ValidationError('Deposit threshold must be greater than zero.')
+            try:
+                bonus = Decimal(bonus_raw)
+            except InvalidOperation:
+                raise ValidationError('Commission rate bonus must be a valid decimal number.')
+            if not (0 <= bonus <= 99):
+                raise ValidationError('Commission rate bonus must be between 0 and 99.')
+
+            package = RewardPackage(name=name, deposit_threshold=threshold, commission_rate_bonus=bonus)
+            package.full_clean()
+            package.save()
+            return redirect('web:admin_rewards')
+        except (ValidationError, InvalidOperation) as exc:
+            error = _error_message(exc)
+
+    return render(
+        request,
+        'web/admin_reward_create.html',
+        {'error': error, 'active': 'admin_rewards'},
+    )
+
+
+def admin_edit_reward_view(request, package_id):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    package = get_object_or_404(RewardPackage, pk=package_id)
+    error = None
+
+    if request.method == 'POST':
+        try:
+            name = request.POST.get('name', '').strip()
+            threshold_raw = request.POST.get('deposit_threshold', '').strip()
+            bonus_raw = request.POST.get('commission_rate_bonus', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+
+            if not name:
+                raise ValidationError('Name is required.')
+            try:
+                threshold = Decimal(threshold_raw)
+            except InvalidOperation:
+                raise ValidationError('Deposit threshold must be a valid decimal number.')
+            if threshold <= 0:
+                raise ValidationError('Deposit threshold must be greater than zero.')
+            try:
+                bonus = Decimal(bonus_raw)
+            except InvalidOperation:
+                raise ValidationError('Commission rate bonus must be a valid decimal number.')
+            if not (0 <= bonus <= 99):
+                raise ValidationError('Commission rate bonus must be between 0 and 99.')
+
+            package.name = name
+            package.deposit_threshold = threshold
+            package.commission_rate_bonus = bonus
+            package.is_active = is_active
+            package.full_clean()
+            package.save()
+            return redirect('web:admin_rewards')
+        except (ValidationError, InvalidOperation) as exc:
+            error = _error_message(exc)
+
+    return render(
+        request,
+        'web/admin_reward_edit.html',
+        {'package': package, 'error': error, 'active': 'admin_rewards'},
     )
 
 
@@ -1848,6 +1954,8 @@ def parlay_history_view(request):
     )
 
 def _wallet_context(user, extra=None):
+    from apps.rewards.services import get_lifetime_deposit_total
+
     wallet, _ = Wallet.objects.get_or_create(user=user)
     transactions = WalletTransaction.objects.filter(wallet=wallet).select_related('wallet')
     pending_deposits = CryptoPayment.objects.filter(
@@ -1855,11 +1963,21 @@ def _wallet_context(user, extra=None):
         payment_type=CryptoPayment.PaymentType.DEPOSIT,
         status=CryptoPayment.Status.PENDING,
     )
+
+    lifetime_deposits = get_lifetime_deposit_total(wallet)
+    claimed_package_ids = set(UserRewardClaim.objects.filter(user=user).values_list('package_id', flat=True))
+    reward_packages = [
+        {'package': pkg, 'claimed': pkg.id in claimed_package_ids}
+        for pkg in RewardPackage.objects.filter(is_active=True).order_by('deposit_threshold')
+    ]
+
     context = {
         'wallet': wallet,
         'transactions': transactions,
         'pending_deposits': pending_deposits,
         'cashback_credits': CashbackCredit.objects.filter(user=user).order_by('-created_at')[:25],
+        'reward_packages': reward_packages,
+        'lifetime_deposits': lifetime_deposits,
         'active': 'wallet',
         # The self-confirm button must only ever be usable when the mock
         # provider is active (local/dev). It is never shown against a real

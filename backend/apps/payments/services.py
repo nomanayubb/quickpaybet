@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
+from apps.rewards.services import apply_reward_packages
 from apps.wallet.services import deposit_funds, withdraw_funds
 
 from .models import CryptoPayment
@@ -231,11 +232,12 @@ def handle_deposit_success(external_id: str) -> CryptoPayment:
         raise ValidationError('Pending payment not found.')
 
     with transaction.atomic():
-        deposit_funds(
+        txn = deposit_funds(
             user=payment.user,
             amount=payment.amount,
             description=f"Crypto deposit confirmed ({payment.external_id})"
         )
+        apply_reward_packages(payment.user, txn.wallet)
         payment.status = CryptoPayment.Status.COMPLETED
         payment.save(update_fields=['status', 'updated_at'])
 

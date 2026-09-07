@@ -78,6 +78,31 @@
         </tbody>
     </table>
 
+    {% if reward_packages %}
+        <h3 style="margin-top:24px;">Reward Packages</h3>
+        <table>
+            <thead>
+                <tr><th>Package</th><th>Deposit Required</th><th>Commission Bonus</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+                {% for row in reward_packages %}
+                    <tr>
+                        <td>{{ row.package.name }}</td>
+                        <td>{{ row.package.deposit_threshold|floatformat:2 }}</td>
+                        <td>+{{ row.package.commission_rate_bonus }}%</td>
+                        <td>
+                            {% if row.claimed %}
+                                Earned
+                            {% else %}
+                                {{ lifetime_deposits|floatformat:2 }} / {{ row.package.deposit_threshold|floatformat:2 }} deposited
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+
     {% if cashback_credits %}
         <h3 style="margin-top:24px;">Cashback Credits</h3>
         <table>

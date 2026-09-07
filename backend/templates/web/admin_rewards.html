@@ -1,0 +1,31 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Reward Packages</h1>
+    <p style="color:#555;">
+        A user whose lifetime confirmed deposits cross a package's threshold gets that
+        package's commission-rate bonus added to their account permanently, one time
+        per package. Editing a package only affects future claims, never past ones.
+    </p>
+    <p><a class="btn" href="{% url 'web:admin_create_reward' %}">+ Create New Package</a></p>
+
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Deposit Threshold</th><th>Commission Bonus</th><th>Status</th><th>Claimed By</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for package in packages %}
+                <tr>
+                    <td>{{ package.name }}</td>
+                    <td>{{ package.deposit_threshold }}</td>
+                    <td>+{{ package.commission_rate_bonus }}%</td>
+                    <td>{{ package.is_active|yesno:"Active,Inactive" }}</td>
+                    <td>{{ package.claim_count }} user{{ package.claim_count|pluralize }}</td>
+                    <td><a class="btn" href="{% url 'web:admin_edit_reward' package.id %}">Edit</a></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6">No reward packages yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

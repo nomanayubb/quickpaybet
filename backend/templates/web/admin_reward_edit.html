@@ -1,0 +1,31 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Edit Reward Package – {{ package.name }}</h1>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label>Name</label>
+            <input type="text" name="name" value="{{ package.name }}" required>
+        </div>
+        <div class="form-group">
+            <label>Deposit threshold (cumulative lifetime deposits required)</label>
+            <input type="number" name="deposit_threshold" step="0.00000001" min="0.00000001" value="{{ package.deposit_threshold }}" required>
+        </div>
+        <div class="form-group">
+            <label>Commission rate bonus (%)</label>
+            <input type="number" name="commission_rate_bonus" step="0.01" min="0" max="99" value="{{ package.commission_rate_bonus }}" required>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" name="is_active" {% if package.is_active %}checked{% endif %}> Active</label>
+        </div>
+        <button type="submit" class="btn">Save changes</button>
+    </form>
+
+    <p><a href="{% url 'web:admin_rewards' %}">← Back to reward packages</a></p>
+{% endblock %}
