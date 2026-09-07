@@ -79,11 +79,24 @@ class User(AbstractUser):
         verbose_name=_('Cashback wagering multiplier override (blank = inherit global default)'),
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    is_house_account = models.BooleanField(
+        default=False,
+        verbose_name=_('House account (the exchange auto-seeds synthetic lay liquidity as this user)'),
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
     objects = UserManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['is_house_account'],
+                condition=models.Q(is_house_account=True),
+                name='at_most_one_house_account',
+            ),
+        ]
 
     def __str__(self):
         return self.email

@@ -12,7 +12,12 @@ from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
 from .models import Match, OddsAdjustmentConfig, OddsHistoryEntry, RealtimeOddsConfig, Sport
-from .pricing import apply_odds_adjustment, resolve_effective_adjustment
+from .pricing import (
+    apply_odds_adjustment,
+    compute_lay_price,
+    resolve_effective_adjustment,
+    resolve_effective_lay_spread,
+)
 from .providers import (
     BaseOddsProvider,
     MockOddsProvider,
@@ -495,3 +500,38 @@ class OddsAdjustmentRealtimeTests(TestCase):
         self.assertNotEqual(match.odds_home, Decimal('2.00'))  # the match's odds did move...
         bet.refresh_from_db()
         self.assertEqual(bet.odds, Decimal('2.00'))  # ...but the already-placed bet's odds did not.
+
+
+class LaySpreadPricingTests(TestCase):
+    def test_lay_price_adds_spread_to_back_odds(self):
+        self.assertEqual(compute_lay_price(Decimal('2.00'), Decimal('0.10')), Decimal('2.10'))
+
+    def test_lay_price_always_strictly_greater_than_back_odds_even_with_floor_spread(self):
+        lay = compute_lay_price(Decimal('1.20'), Decimal('0.01'))
+        self.assertGreater(lay, Decimal('1.20'))
+
+    def test_zero_or_negative_spread_input_still_clamped_by_floor(self):
+        # Calls compute_lay_price directly with an out-of-contract spread
+        # (the model validators should already reject these, but this
+        # proves the real, unconditional code-level guarantee holds even
+        # if a caller somehow bypasses them).
+        back = Decimal('3.00')
+        lay_zero = compute_lay_price(back, Decimal('0'))
+        lay_negative = compute_lay_price(back, Decimal('-5.00'))
+        self.assertGreater(lay_zero, back)
+        self.assertGreater(lay_negative, back)
+        self.assertEqual(lay_zero, back + Decimal('0.01'))
+        self.assertEqual(lay_negative, back + Decimal('0.01'))
+
+    def test_none_back_odds_returns_none(self):
+        self.assertIsNone(compute_lay_price(None, Decimal('0.10')))
+
+    def test_resolve_effective_lay_spread_prefers_match_override(self):
+        self.assertEqual(
+            resolve_effective_lay_spread(Decimal('0.50'), Decimal('0.10')), Decimal('0.50'),
+        )
+
+    def test_resolve_effective_lay_spread_falls_back_to_default(self):
+        self.assertEqual(
+            resolve_effective_lay_spread(None, Decimal('0.10')), Decimal('0.10'),
+        )

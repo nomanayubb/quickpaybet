@@ -85,13 +85,17 @@ class Command(BaseCommand):
             'status': Match.Status.SCHEDULED,
         }
 
-        _, was_created = Match.objects.update_or_create(
+        match_obj, was_created = Match.objects.update_or_create(
             sport=sport,
             home_team=item['home_team'],
             away_team=item['away_team'],
             start_time=start_time,
             defaults=defaults,
         )
+
+        from apps.exchange.services import sync_house_lay_orders_for_match
+        sync_house_lay_orders_for_match(match_obj)
+
         if was_created:
             created_counter += 1
         else:

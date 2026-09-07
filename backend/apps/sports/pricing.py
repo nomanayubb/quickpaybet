@@ -115,3 +115,32 @@ def apply_odds_adjustment(
         )
 
     return _adjust(odds_home), _adjust(odds_draw), _adjust(odds_away)
+
+
+LAY_SPREAD_FLOOR = Decimal('0.01')
+
+
+def resolve_effective_lay_spread(match_spread, default_spread) -> Decimal:
+    """Returns a match's own lay_spread_override if set, else the global default."""
+    return match_spread if match_spread is not None else default_spread
+
+
+def compute_lay_price(back_odds, spread: Decimal):
+    """
+    Returns the synthetic house lay price: back_odds plus a flat spread,
+    floor-clamped so the result is always strictly greater than back_odds -
+    the arbitrage-safety guarantee - regardless of what `spread` value
+    reaches this function, even 0 or a negative number (the
+    HouseLiquidityConfig/Match validators should already reject those, but
+    this is the real, unconditional, code-level guarantee, exactly like
+    ODDS_FLOOR above). `None` back_odds passes straight through - the real
+    2-way-market guarantee is that a caller never invokes this for the
+    draw selection on a match with no draw market at all.
+    """
+    if back_odds is None:
+        return None
+    effective_spread = max(_to_decimal(spread), LAY_SPREAD_FLOOR)
+    return (_to_decimal(back_odds) + effective_spread).quantize(
+        Decimal('0.01'),
+        rounding=ROUND_HALF_UP,
+    )

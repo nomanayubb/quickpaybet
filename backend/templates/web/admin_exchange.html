@@ -65,7 +65,7 @@
         <tbody>
             {% for order in orders_page %}
                 <tr>
-                    <td>{{ order.user.email }}</td>
+                    <td>{{ order.user.email }}{% if house_user_id and order.user_id == house_user_id %} <span class="badge">HOUSE</span>{% endif %}</td>
                     <td><a href="{% url 'web:match_detail' order.match_id %}">{{ order.match.home_team }} v {{ order.match.away_team }}</a></td>
                     <td>{{ order.selection }}</td>
                     <td>{{ order.side }}</td>
@@ -126,8 +126,8 @@
                 <tr>
                     <td><a href="{% url 'web:match_detail' fill.match_id %}">{{ fill.match.home_team }} v {{ fill.match.away_team }}</a></td>
                     <td>{{ fill.selection }}</td>
-                    <td>{{ fill.back_order.user.email }}</td>
-                    <td>{{ fill.lay_order.user.email }}</td>
+                    <td>{{ fill.back_order.user.email }}{% if house_user_id and fill.back_order.user_id == house_user_id %} <span class="badge">HOUSE</span>{% endif %}</td>
+                    <td>{{ fill.lay_order.user.email }}{% if house_user_id and fill.lay_order.user_id == house_user_id %} <span class="badge">HOUSE</span>{% endif %}</td>
                     <td>{{ fill.odds }}</td>
                     <td>{{ fill.stake }}</td>
                     <td>{{ fill.status }}</td>

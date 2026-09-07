@@ -1,16 +1,26 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from apps.sports.models import Sport, Match
+from apps.sports.models import HouseLiquidityConfig, Sport, Match
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
 from .models import ExchangeConfig, ExchangeFill, ExchangeOrder
-from .services import cancel_order, cash_out_order, place_order, settle_exchange_for_match
+from .services import (
+    _house_reseed_lock_key,
+    cancel_order,
+    cash_out_order,
+    get_house_user,
+    get_order_book,
+    place_order,
+    settle_exchange_for_match,
+    sync_house_lay_orders_for_match,
+)
 
 User = get_user_model()
 
@@ -455,3 +465,200 @@ class ExchangeCashOutTests(TestCase):
         self.match.save()
         with self.assertRaises(ValidationError):
             cash_out_order(self.backer, order.id)
+
+
+
+class TwoWayMarketExchangeTests(TestCase):
+    """
+    Confirms the exchange never allows a Draw order on a match with no
+    draw market - a real pre-existing gap found while building the
+    house-lay-liquidity feature (the sportsbook half of match_detail.html
+    already correctly hides Draw for a 2-way match; the exchange half did
+    not).
+    """
+    def setUp(self):
+        self.sport = Sport.objects.create(name='TwoWaySport', slug='two-way-sport')
+        self.match_2way = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(days=1),
+            odds_home=Decimal('1.80'), odds_draw=None, odds_away=Decimal('2.20'),
+        )
+        self.match_3way = Match.objects.create(
+            sport=self.sport, home_team='H2', away_team='A2',
+            start_time=timezone.now() + timezone.timedelta(days=1),
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.user = User.objects.create_user(email='twoway@example.com', password='testpass123')
+        Wallet.objects.get_or_create(user=self.user)
+        deposit_funds(self.user, Decimal('1000'))
+
+    def test_place_order_rejects_draw_on_2way_match(self):
+        with self.assertRaises(ValidationError):
+            place_order(self.user, self.match_2way.id, 'draw', 'back', Decimal('3.00'), Decimal('10'))
+
+    def test_place_order_accepts_draw_on_3way_match(self):
+        order = place_order(self.user, self.match_3way.id, 'draw', 'back', Decimal('3.00'), Decimal('10'))
+        self.assertEqual(order.selection, 'draw')
+
+    def test_get_order_book_omits_draw_key_for_2way_match(self):
+        book = get_order_book(self.match_2way)
+        self.assertNotIn('draw', book)
+        self.assertIn('home', book)
+        self.assertIn('away', book)
+
+    def test_get_order_book_includes_draw_key_for_3way_match(self):
+        book = get_order_book(self.match_3way)
+        self.assertIn('draw', book)
+
+
+class HouseLaySeedingTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        HouseLiquidityConfig.objects.filter(pk=1).delete()
+        self.config = HouseLiquidityConfig.objects.create(
+            pk=1, is_enabled=True,
+            default_lay_spread=Decimal('0.10'),
+            default_max_liability_per_selection=Decimal('1000.00'),
+        )
+
+        self.house_user = User.objects.create_user(email='house@example.com', password='testpass123')
+        self.house_user.is_house_account = True
+        self.house_user.save(update_fields=['is_house_account'])
+        Wallet.objects.get_or_create(user=self.house_user)
+        deposit_funds(self.house_user, Decimal('1000000'))
+
+        self.sport = Sport.objects.create(name='HouseLaySport', slug='house-lay-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(days=1),
+            status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+
+        self.real_user = User.objects.create_user(email='realuser@example.com', password='testpass123')
+        Wallet.objects.get_or_create(user=self.real_user)
+        deposit_funds(self.real_user, Decimal('1000'))
+
+    def test_get_house_user_returns_flagged_account(self):
+        self.assertEqual(get_house_user().id, self.house_user.id)
+
+    def test_disabled_config_is_a_no_op(self):
+        self.config.is_enabled = False
+        self.config.save()
+        sync_house_lay_orders_for_match(self.match)
+        self.assertEqual(ExchangeOrder.objects.filter(user=self.house_user).count(), 0)
+
+    def test_no_house_user_is_a_no_op(self):
+        self.house_user.is_house_account = False
+        self.house_user.save(update_fields=['is_house_account'])
+        sync_house_lay_orders_for_match(self.match)
+        self.assertEqual(ExchangeOrder.objects.count(), 0)
+
+    def test_house_seeds_lay_order_after_odds_write(self):
+        sync_house_lay_orders_for_match(self.match)
+        order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+        self.assertEqual(order.side, ExchangeOrder.Side.LAY)
+        self.assertEqual(order.odds, Decimal('2.10'))  # 2.00 back + 0.10 spread
+
+    def test_house_seeds_all_three_selections_for_3way_match(self):
+        sync_house_lay_orders_for_match(self.match)
+        selections = set(
+            ExchangeOrder.objects.filter(user=self.house_user).values_list('selection', flat=True)
+        )
+        self.assertEqual(selections, {'home', 'draw', 'away'})
+
+    def test_2way_match_never_gets_a_draw_house_order(self):
+        two_way = Match.objects.create(
+            sport=self.sport, home_team='H2', away_team='A2',
+            start_time=timezone.now() + timezone.timedelta(days=1),
+            status=Match.Status.SCHEDULED,
+            odds_home=Decimal('1.80'), odds_draw=None, odds_away=Decimal('2.20'),
+        )
+        sync_house_lay_orders_for_match(two_way)
+        selections = set(
+            ExchangeOrder.objects.filter(user=self.house_user, match=two_way).values_list('selection', flat=True)
+        )
+        self.assertEqual(selections, {'home', 'away'})
+
+    def test_per_match_override_beats_global_default(self):
+        self.match.lay_spread_override = Decimal('1.00')
+        self.match.save(update_fields=['lay_spread_override'])
+        sync_house_lay_orders_for_match(self.match)
+        order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+        self.assertEqual(order.odds, Decimal('3.00'))  # 2.00 back + 1.00 override spread
+
+    def test_real_user_can_back_against_house_seeded_lay_order_and_it_settles_correctly(self):
+        sync_house_lay_orders_for_match(self.match)
+        house_order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+
+        back = place_order(self.real_user, self.match.id, 'home', 'back', Decimal('2.10'), Decimal('50'))
+        back.refresh_from_db()
+        house_order.refresh_from_db()
+        self.assertEqual(back.matched_stake, Decimal('50'))
+        fill = ExchangeFill.objects.get(back_order=back, lay_order=house_order)
+        self.assertEqual(fill.odds, Decimal('2.10'))
+
+        real_user_balance_before = Wallet.objects.get(user=self.real_user).balance
+        house_balance_before = Wallet.objects.get(user=self.house_user).balance
+
+        self.match.status = Match.Status.FINISHED
+        self.match.home_score = 1
+        self.match.away_score = 0
+        self.match.save()
+        settle_exchange_for_match(self.match)
+
+        # Real user backed at 2.10 and won: profit = 50*(2.10-1) = 55, minus
+        # commission (default ExchangeConfig rate, 5%) = 2.75, net = 52.25.
+        real_user_balance_after = Wallet.objects.get(user=self.real_user).balance
+        house_balance_after = Wallet.objects.get(user=self.house_user).balance
+        self.assertEqual(real_user_balance_after, real_user_balance_before + Decimal('52.25000000'))
+        self.assertEqual(house_balance_after, house_balance_before - Decimal('55'))
+
+    def test_exposure_cap_stops_new_house_liquidity_once_hit(self):
+        self.match.house_max_liability_override = Decimal('10')
+        self.match.save(update_fields=['house_max_liability_override'])
+        sync_house_lay_orders_for_match(self.match)
+        order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+        # Liability = stake * (odds - 1) = cap (10) / (2.10 - 1) = ~9.0909...
+        self.assertLessEqual(order.stake * (order.odds - 1), Decimal('10'))
+
+        # Fully match the house's offered liquidity, then reseed again -
+        # committed liability is already at (or effectively at) the cap, so
+        # no further stake should be offered.
+        place_order(self.real_user, self.match.id, 'home', 'back', Decimal('2.10'), order.stake)
+        cache.clear()  # allow a fresh reseed pass (the lock would otherwise still be held)
+        orders_before = ExchangeOrder.objects.filter(user=self.house_user, selection='home').count()
+        sync_house_lay_orders_for_match(self.match)
+        orders_after = ExchangeOrder.objects.filter(user=self.house_user, selection='home').count()
+        self.assertEqual(orders_before, orders_after)
+
+    def test_stale_house_order_replaced_without_touching_matched_fills(self):
+        sync_house_lay_orders_for_match(self.match)
+        original_order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+
+        # Partially match it.
+        place_order(self.real_user, self.match.id, 'home', 'back', Decimal('2.10'), Decimal('10'))
+        original_fill = ExchangeFill.objects.get(lay_order=original_order)
+
+        # Odds move; reseed again.
+        self.match.odds_home = Decimal('2.50')
+        self.match.save(update_fields=['odds_home'])
+        cache.clear()
+        sync_house_lay_orders_for_match(self.match)
+
+        original_order.refresh_from_db()
+        original_fill.refresh_from_db()
+        self.assertEqual(original_order.status, ExchangeOrder.Status.CANCELLED)
+        self.assertEqual(original_order.matched_stake, Decimal('10'))  # untouched
+        self.assertEqual(original_fill.odds, Decimal('2.10'))  # untouched
+        self.assertEqual(original_fill.status, ExchangeFill.Status.PENDING)
+
+        new_order = ExchangeOrder.objects.get(
+            user=self.house_user, selection='home', status=ExchangeOrder.Status.OPEN,
+        )
+        self.assertEqual(new_order.odds, Decimal('2.60'))  # 2.50 + 0.10
+
+    def test_concurrent_reseed_calls_for_same_match_do_not_double_liquidity(self):
+        cache.add(_house_reseed_lock_key(self.match.id), True, timeout=15)
+        sync_house_lay_orders_for_match(self.match)
+        self.assertEqual(ExchangeOrder.objects.filter(user=self.house_user).count(), 0)

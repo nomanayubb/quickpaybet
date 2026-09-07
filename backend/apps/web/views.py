@@ -475,6 +475,10 @@ def admin_exchange_dashboard_view(request):
 
     from django.db.models import Sum
 
+    from apps.exchange.services import get_house_user
+
+    house_user = get_house_user()
+
     since_7d = timezone.now() - timedelta(days=7)
     settled_fills = ExchangeFill.objects.filter(
         status__in=[ExchangeFill.Status.BACK_WON, ExchangeFill.Status.LAY_WON]
@@ -551,6 +555,7 @@ def admin_exchange_dashboard_view(request):
             'order_status_choices': ExchangeOrder.Status.choices,
             'fill_status_choices': ExchangeFill.Status.choices,
             'selection_choices': Bet.Selection.choices,
+            'house_user_id': house_user.id if house_user else None,
             'active': 'admin_exchange',
         },
     )

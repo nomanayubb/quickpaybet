@@ -1,0 +1,18 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<h1>Fund house account &mdash; {{ house_user.email }}</h1>
+<p>Current balance: {{ house_user.wallet.balance }}</p>
+
+<form method="post">
+    {% csrf_token %}
+    <div class="form-row">
+        <label for="id_amount">Amount to deposit</label>
+        <input type="number" name="amount" id="id_amount" step="0.00000001" min="0.00000001" required>
+    </div>
+    <div class="submit-row">
+        <input type="submit" value="Deposit" class="default">
+        <a class="button cancel-link" href="{{ change_url }}">Cancel</a>
+    </div>
+</form>
+{% endblock %}

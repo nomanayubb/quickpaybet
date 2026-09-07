@@ -129,10 +129,14 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
             Match.objects.filter(pk=m.pk).update(
                 odds_home=adj_home, odds_draw=adj_draw, odds_away=adj_away,
             )
+            m.odds_home, m.odds_draw, m.odds_away = adj_home, adj_draw, adj_away
             if keep_history:
                 history_entries.append(
                     OddsHistoryEntry(match=m, odds_home=adj_home, odds_draw=adj_draw, odds_away=adj_away)
                 )
+
+            from apps.exchange.services import sync_house_lay_orders_for_match
+            sync_house_lay_orders_for_match(m)
 
     if history_entries:
         OddsHistoryEntry.objects.bulk_create(history_entries)

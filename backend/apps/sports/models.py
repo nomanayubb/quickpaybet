@@ -98,6 +98,22 @@ class Match(models.Model):
         validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
         verbose_name='Odds adjustment override (added to every odds value; blank = use the global default)',
     )
+    lay_spread_override = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('5.00'))],
+        verbose_name='Back→lay spread override for house-seeded exchange liquidity (blank = use the global default)',
+    )
+    house_max_liability_override = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.00'))],
+        verbose_name='Max house liability per selection override for this match (blank = use the global default)',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -209,6 +225,58 @@ class OddsAdjustmentConfig(models.Model):
 
     @classmethod
     def get_solo(cls) -> 'OddsAdjustmentConfig':
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class HouseLiquidityConfig(models.Model):
+    """
+    Singleton settings row (same get_solo()/pk=1 pattern as
+    OddsAdjustmentConfig above) controlling the exchange's house-seeded
+    synthetic lay liquidity - see apps.exchange.services for how these are
+    actually used. Off by default: deploying this feature's code changes
+    nothing until an admin explicitly sets up a house account, funds it,
+    and turns this on - the same "safe until opted in" posture as
+    RealtimeOddsConfig.is_enabled.
+
+    default_lay_spread is bounded at a strictly positive floor (0.01, not
+    0 or negative like odds_adjustment is allowed to be) - a spread must
+    never be able to reach zero or negative even at the admin-input layer,
+    since that's the entire guarantee that a computed lay price can never
+    be arbitraged against its back price (see
+    apps.sports.pricing.compute_lay_price for the actual, unconditional
+    code-level enforcement of this - these validators are a second,
+    belt-and-braces layer, never the sole protection).
+    """
+    is_enabled = models.BooleanField(
+        default=False,
+        verbose_name='House lay-liquidity seeding enabled (global switch)',
+    )
+    default_lay_spread = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('0.10'),
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('5.00'))],
+        verbose_name='Default back→lay spread (flat amount added to the back odds to get the house lay price)',
+    )
+    default_max_liability_per_selection = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=Decimal('1000.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        verbose_name='Default max house liability (currency units) per match+selection',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'House Liquidity Config'
+        verbose_name_plural = 'House Liquidity Config'
+
+    def __str__(self):
+        return f'House liquidity: {"on" if self.is_enabled else "off"}, spread={self.default_lay_spread}, cap={self.default_max_liability_per_selection}'
+
+    @classmethod
+    def get_solo(cls) -> 'HouseLiquidityConfig':
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 

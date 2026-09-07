@@ -1,16 +1,21 @@
-from decimal import Decimal
+import logging
+from decimal import ROUND_DOWN, Decimal
 
+from django.core.cache import cache
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 from apps.bets.models import Bet
 from apps.cashback.services import credit_cashback_for_loss, record_wager
-from apps.sports.models import Match
+from apps.sports.models import HouseLiquidityConfig, Match
+from apps.sports.pricing import compute_lay_price, resolve_effective_lay_spread
 from apps.wallet.models import Wallet, WalletTransaction
 
 from .models import ExchangeConfig, ExchangeFill, ExchangeOrder
 
 MIN_ODDS = Decimal('1.00')
+
+logger = logging.getLogger(__name__)
 
 
 def _exposure_rate(side: str, odds: Decimal) -> Decimal:
@@ -49,6 +54,8 @@ def place_order(user, match_id: int, selection: str, side: str, odds: Decimal, s
         match = Match.objects.get(pk=match_id)
     except Match.DoesNotExist:
         raise ValidationError('Match not found.')
+    if selection == Bet.Selection.DRAW and match.odds_draw is None:
+        raise ValidationError('This match has no draw market.')
     if match.status not in (Match.Status.SCHEDULED, Match.Status.LIVE):
         raise ValidationError('Exchange betting is closed for this match.')
 
@@ -499,8 +506,12 @@ def get_order_book(match: Match, depth: int = 5) -> dict:
     """
     from django.db.models import Sum
 
+    selections = [Bet.Selection.HOME, Bet.Selection.AWAY]
+    if match.odds_draw is not None:
+        selections.append(Bet.Selection.DRAW)
+
     book = {}
-    for selection in Bet.Selection.values:
+    for selection in selections:
         book[selection] = {}
         for side in ExchangeOrder.Side.values:
             rows = (
@@ -568,3 +579,130 @@ def settle_exchange_for_match(match: Match) -> None:
                 wallet.save(update_fields=['reserved_balance', 'updated_at'])
             order.status = terminal_status
             order.save(update_fields=['status', 'updated_at'])
+
+
+def get_house_user():
+    """
+    Returns the single flagged house User (see User.is_house_account, a
+    database-enforced at-most-one constraint), or None if an admin hasn't
+    designated one yet. Every caller must treat None as "feature not
+    configured yet, skip silently" - never a crash - since this is checked
+    on every odds refresh, long before any admin necessarily sets this up.
+    """
+    from apps.accounts.models import User
+    return User.objects.filter(is_house_account=True).first()
+
+
+def _house_reseed_lock_key(match_id: int) -> str:
+    return f'house_lay_reseed_lock:{match_id}'
+
+
+def _house_committed_liability(house_user, match, selection) -> Decimal:
+    """
+    Real, currently-outstanding house liability on this match+selection:
+    every MATCHED stake unit across all the house's own lay orders here
+    (any status except VOID - a CANCELLED order's already-matched portion
+    is still a live ExchangeFill the house owes on if the selection wins;
+    only its unmatched remainder disappeared on cancel). VOID only ever
+    happens post-settlement/cancellation, by which point
+    sync_house_lay_orders_for_match no longer runs for this match anyway
+    (see its own SCHEDULED/LIVE guard below).
+    """
+    orders = ExchangeOrder.objects.filter(
+        user=house_user, match=match, selection=selection, side=ExchangeOrder.Side.LAY,
+    ).exclude(status=ExchangeOrder.Status.VOID)
+    return sum((o.matched_stake * (o.odds - 1) for o in orders), Decimal('0'))
+
+
+def sync_house_lay_orders_for_match(match: Match) -> None:
+    """
+    Called right after match.odds_home/draw/away are (re)written - from
+    apps.sports.realtime.maybe_refresh_sport_odds() and
+    apps.sports.management.commands.sync_odds._process_match(), the same
+    two call sites apply_odds_adjustment() already hooks into. For each
+    selection this match actually has (skips 'draw' entirely for a 2-way
+    match - no draw lay price or house order can ever be created for one
+    by construction), computes the target lay price, cancels the house's
+    stale UNMATCHED resting order there if one exists (already-matched
+    fills are historical and are never touched), and places one fresh
+    house lay order sized to exactly fill whatever cap headroom remains.
+
+    No-ops immediately unless HouseLiquidityConfig.is_enabled, a house
+    account has been configured, and the match is still open for betting -
+    shipping this code changes nothing until an admin deliberately opts in.
+    """
+    config = HouseLiquidityConfig.get_solo()
+    if not config.is_enabled:
+        return
+    if match.status not in (Match.Status.SCHEDULED, Match.Status.LIVE):
+        return
+
+    house_user = get_house_user()
+    if house_user is None:
+        return
+
+    if not cache.add(_house_reseed_lock_key(match.id), True, timeout=15):
+        # Another reseed pass for this exact match is already in flight
+        # (e.g. a scheduled sync_odds run landing at the same moment as a
+        # viewer-triggered refresh) - skip rather than double-offer
+        # liquidity. Same cache.add()-based atomic-lock idiom as
+        # maybe_refresh_sport_odds's per-sport lock, scoped to one match.
+        # The underlying wallet arithmetic in place_order()/cancel_order()
+        # is already safely serialized regardless via select_for_update();
+        # this lock's job is purely to stop the house from briefly
+        # offering more than its own configured cap, not a money-safety
+        # backstop by itself.
+        return
+
+    effective_spread = resolve_effective_lay_spread(match.lay_spread_override, config.default_lay_spread)
+    effective_cap = (
+        match.house_max_liability_override
+        if match.house_max_liability_override is not None
+        else config.default_max_liability_per_selection
+    )
+
+    selections = [Bet.Selection.HOME, Bet.Selection.AWAY]
+    if match.odds_draw is not None:
+        selections.append(Bet.Selection.DRAW)
+
+    back_odds_by_selection = {
+        Bet.Selection.HOME: match.odds_home,
+        Bet.Selection.DRAW: match.odds_draw,
+        Bet.Selection.AWAY: match.odds_away,
+    }
+
+    for selection in selections:
+        back_odds = back_odds_by_selection[selection]
+        if back_odds is None:
+            continue
+        lay_price = compute_lay_price(back_odds, effective_spread)
+
+        with transaction.atomic():
+            stale_orders = ExchangeOrder.objects.select_for_update().filter(
+                user=house_user, match=match, selection=selection,
+                side=ExchangeOrder.Side.LAY, status=ExchangeOrder.Status.OPEN,
+            )
+            for stale in stale_orders:
+                if stale.unmatched_stake > 0:
+                    cancel_order(house_user, stale.id)
+
+        committed = _house_committed_liability(house_user, match, selection)
+        headroom = effective_cap - committed
+        if headroom <= 0:
+            continue
+
+        stake_to_offer = (headroom / (lay_price - 1)).quantize(
+            Decimal('0.00000001'), rounding=ROUND_DOWN,
+        )
+        if stake_to_offer <= 0:
+            continue
+
+        try:
+            place_order(
+                user=house_user, match_id=match.id, selection=selection,
+                side=ExchangeOrder.Side.LAY, odds=lay_price, stake=stake_to_offer,
+            )
+        except ValidationError as exc:
+            logger.warning(
+                'House lay reseed skipped for match %s selection %s: %s', match.id, selection, exc,
+            )
