@@ -106,6 +106,9 @@
                     <a href="{% url 'web:admin_cashback' %}" class="{% if active == 'admin_cashback' %}active{% endif %}">Cashback</a>
                     <a href="{% url 'web:admin_pricing_overrides' %}" class="{% if active == 'admin_pricing_overrides' %}active{% endif %}">Custom Odds</a>
                     <a href="{% url 'web:admin_rewards' %}" class="{% if active == 'admin_rewards' %}active{% endif %}">Rewards</a>
+                    {% if user.is_staff or user.is_superuser or user.role == 'admin' %}
+                        <a href="{% url 'web:admin_backups' %}" class="{% if active == 'admin_backups' %}active{% endif %}">Backups</a>
+                    {% endif %}
                 {% endif %}
                 <a href="{% url 'web:parlay_bet' %}" class="{% if active == 'parlay_bet' %}active{% endif %}">Parlay Bet</a>
                 <a href="{% url 'web:parlay_history' %}" class="{% if active == 'parlay_history' %}active{% endif %}">My Parlays</a>

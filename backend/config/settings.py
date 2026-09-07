@@ -18,6 +18,7 @@ env = environ.Env(
     EMAIL_USE_TLS=(bool, False),
     SECURE_SSL_REDIRECT=(bool, False),
     CACHE_BACKEND=(str, 'redis'),
+    BACKUP_ENCRYPTION_KEY=(str, ''),
 )
 
 environ.Env.read_env(BASE_DIR / '.env')
@@ -200,3 +201,12 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     X_FRAME_OPTIONS = 'DENY'
     CSRF_TRUSTED_ORIGINS = ['https://' + host for host in ALLOWED_HOSTS if host != '*']
+
+# Disaster-recovery encrypted database backups (apps.common.management
+# commands backup_database/restore_database). BACKUP_ENCRYPTION_KEY is a
+# Fernet key generated once and stored outside the repo - see .env.example
+# for how to generate it. Backups are written under BACKUP_DIR, which is
+# gitignored and never served as a static file; they're only ever exposed
+# through the admin-only download view in apps.web.
+BACKUP_ENCRYPTION_KEY = env('BACKUP_ENCRYPTION_KEY')
+BACKUP_DIR = BASE_DIR / 'backups'

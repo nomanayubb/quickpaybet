@@ -10,3 +10,4 @@ venv/
 *.log
 .env.local
 .env.production
+backups/

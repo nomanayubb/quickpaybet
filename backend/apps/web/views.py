@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django.core.exceptions import ValidationError
@@ -14,7 +14,8 @@ from django.db import IntegrityError
 from rest_framework.exceptions import ValidationError as ServiceValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from datetime import timedelta
+from datetime import timedelta, datetime
+from pathlib import Path
 
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
@@ -833,6 +834,70 @@ def admin_edit_reward_view(request, package_id):
         'web/admin_reward_edit.html',
         {'package': package, 'error': error, 'active': 'admin_rewards'},
     )
+
+
+def admin_backups_view(request):
+    """
+    Disaster-recovery backups dashboard: lists the encrypted .json.enc files
+    already on disk (written by the nightly Celery Beat job or a manual
+    trigger from here), and lets a full admin enqueue an extra one on demand.
+    Gated to _is_full_admin rather than the general _has_dashboard_access -
+    a decrypted one of these files contains every user's password hash and
+    every wallet balance, so this is deliberately stricter than most
+    /panel/ pages.
+    """
+    if not _is_full_admin(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    message = None
+    if request.method == 'POST' and request.POST.get('action') == 'trigger':
+        from apps.common.tasks import run_database_backup
+        try:
+            run_database_backup.delay()
+            message = 'Backup enqueued - refresh in a moment to see the new file.'
+        except Exception:
+            # The task itself is decorated with ignore_result=True specifically so
+            # this fails within a few seconds instead of retrying against the
+            # result backend for minutes (Celery's Redis result backend otherwise
+            # retries ~20 times with backoff on every call, even before the
+            # broker publish itself) - a real hang caught live-testing this page
+            # with no local Celery/Redis running. Either way, a request thread
+            # must never block on broker/backend availability.
+            message = 'Could not enqueue a backup - the Celery broker (Redis) is unreachable. Is Redis/the worker running?'
+
+    settings.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(settings.BACKUP_DIR.glob('backup_*.json.enc'), key=lambda p: p.name, reverse=True)
+    backups = [
+        {
+            'name': f.name,
+            'size_kb': round(f.stat().st_size / 1024, 1),
+            'created': datetime.fromtimestamp(f.stat().st_mtime),
+        }
+        for f in files
+    ]
+
+    return render(
+        request,
+        'web/admin_backups.html',
+        {'backups': backups, 'message': message, 'key_configured': bool(settings.BACKUP_ENCRYPTION_KEY), 'active': 'admin_backups'},
+    )
+
+
+def admin_backup_download_view(request, filename):
+    if not _is_full_admin(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name.startswith('backup_') or not safe_name.endswith('.json.enc'):
+        return HttpResponse('Invalid filename.', status=400)
+
+    filepath = settings.BACKUP_DIR / safe_name
+    if not filepath.exists():
+        return HttpResponse('Backup not found.', status=404)
+
+    response = HttpResponse(filepath.read_bytes(), content_type='application/octet-stream')
+    response['Content-Disposition'] = f'attachment; filename="{safe_name}"'
+    return response
 
 
 def admin_withdrawal_process_view(request, payment_id):

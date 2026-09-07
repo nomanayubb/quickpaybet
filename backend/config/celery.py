@@ -25,4 +25,8 @@ app.conf.beat_schedule = {
         'task': 'apps.sports.tasks.sync_results_celery',
         'schedule': crontab(minute='*/30'),
     },
+    'nightly-database-backup': {
+        'task': 'apps.common.tasks.run_database_backup',
+        'schedule': crontab(hour=3, minute=0),
+    },
 }
