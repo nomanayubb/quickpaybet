@@ -18,6 +18,16 @@ from .models import Bet, ParlayBet, ParlayLeg
 MAX_PARLAY_LEGS = 12
 MAX_COMBINED_ODDS = Decimal('999999.99')
 
+# How much a match's odds may have moved between being shown to a user and
+# their bet being confirmed before it's rejected for re-confirmation. This
+# is what a "bet acceptance delay" is actually for (stopping a user from
+# exploiting odds they know are about to change) - implemented as a
+# re-validation instead of literally pausing the request for N seconds,
+# which would hold a Gunicorn worker thread the whole time (this project's
+# prod config runs only 3 workers - a real availability risk under any
+# real concurrent betting load, not just a theoretical one).
+BET_ODDS_TOLERANCE = Decimal('0.02')
+
 
 def _get_bet_odds(match: Match, selection: str) -> Decimal:
     odds_map = {
@@ -31,7 +41,7 @@ def _get_bet_odds(match: Match, selection: str) -> Decimal:
     return odds
 
 
-def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
+def place_bet(user, match_id: int, selection: str, stake: Decimal, odds_shown: Decimal = None) -> Bet:
     if stake <= 0:
         raise ValidationError('Stake must be positive.')
 
@@ -56,6 +66,13 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
         raise ValidationError('Betting is closed for this match.')
 
     odds = _get_bet_odds(match, selection)
+
+    if odds_shown is not None and odds_shown > 0:
+        relative_change = abs(odds - odds_shown) / odds_shown
+        if relative_change > BET_ODDS_TOLERANCE:
+            raise ValidationError(
+                f'Odds changed since you loaded this page (was {odds_shown}, now {odds}). Please review and confirm again.'
+            )
 
     with transaction.atomic():
         wallet = Wallet.objects.select_for_update().get(user=user)

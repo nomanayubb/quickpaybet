@@ -6,9 +6,9 @@
     <p><strong>Start:</strong> {{ match.start_time }}</p>
     <p><strong>Status:</strong> {{ match.status }}</p>
     <p><strong>Odds:</strong><br>
-        Home: {{ match.odds_home|default:"-" }}<br>
-        Draw: {{ match.odds_draw|default:"-" }}<br>
-        Away: {{ match.odds_away|default:"-" }}
+        Home: <span id="odds-home">{{ match.odds_home|default:"-" }}</span><br>
+        Draw: <span id="odds-draw">{{ match.odds_draw|default:"-" }}</span><br>
+        Away: <span id="odds-away">{{ match.odds_away|default:"-" }}</span>
     </p>
 
     {% if match.status == 'live' or match.status == 'scheduled' %}
@@ -19,25 +19,82 @@
         {% if not user.is_authenticated %}
             <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to place a bet.</p>
         {% else %}
-            <form method="post">
+            <form method="post" id="bet-form">
                 {% csrf_token %}
                 <div class="form-group">
                     <label>Selection</label>
-                    <select name="selection">
-                        <option value="home">Home – {{ match.odds_home|default:"-" }}</option>
-                        {% if match.odds_draw %}<option value="draw">Draw – {{ match.odds_draw }}</option>{% endif %}
-                        <option value="away">Away – {{ match.odds_away|default:"-" }}</option>
+                    <select name="selection" id="bet-selection">
+                        <option value="home" data-odds="{{ match.odds_home|default:'' }}">Home – <span class="opt-odds-home">{{ match.odds_home|default:"-" }}</span></option>
+                        {% if match.odds_draw %}<option value="draw" data-odds="{{ match.odds_draw }}">Draw – <span class="opt-odds-draw">{{ match.odds_draw }}</span></option>{% endif %}
+                        <option value="away" data-odds="{{ match.odds_away|default:'' }}">Away – <span class="opt-odds-away">{{ match.odds_away|default:"-" }}</span></option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label>Stake</label>
                     <input type="number" name="stake" step="0.01" min="0.01" required value="1">
                 </div>
+                <input type="hidden" name="odds_shown" id="odds-shown-input" value="{{ match.odds_home|default:'' }}">
                 <button type="submit" class="btn">Place Bet</button>
             </form>
         {% endif %}
     {% else %}
         <p>Betting is closed for this match.</p>
+    {% endif %}
+
+    {% if realtime_enabled and match.status == 'live' or realtime_enabled and match.status == 'scheduled' %}
+        <script>
+            (function () {
+                var pollUrl = '{% url "web:match_odds_poll" match.pk %}';
+                var selectionEl = document.getElementById('bet-selection');
+                var oddsShownEl = document.getElementById('odds-shown-input');
+
+                function syncOddsShownToSelection() {
+                    if (!selectionEl || !oddsShownEl) { return; }
+                    var opt = selectionEl.options[selectionEl.selectedIndex];
+                    oddsShownEl.value = opt ? (opt.getAttribute('data-odds') || '') : '';
+                }
+                if (selectionEl) {
+                    selectionEl.addEventListener('change', syncOddsShownToSelection);
+                }
+
+                function applyOdds(data) {
+                    var map = {home: data.odds_home, draw: data.odds_draw, away: data.odds_away};
+                    ['home', 'draw', 'away'].forEach(function (key) {
+                        var display = document.getElementById('odds-' + key);
+                        if (display && map[key] !== null && map[key] !== undefined) {
+                            display.textContent = map[key];
+                        }
+                        var optSpan = document.querySelector('.opt-odds-' + key);
+                        if (optSpan && map[key] !== null && map[key] !== undefined) {
+                            optSpan.textContent = map[key];
+                        }
+                        if (selectionEl) {
+                            var opt = selectionEl.querySelector('option[value="' + key + '"]');
+                            if (opt && map[key] !== null && map[key] !== undefined) {
+                                opt.setAttribute('data-odds', map[key]);
+                            }
+                        }
+                    });
+                    syncOddsShownToSelection();
+                }
+
+                function poll() {
+                    fetch(pollUrl)
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            applyOdds(data);
+                            if (data.should_continue_polling) {
+                                setTimeout(poll, Math.max(1, data.next_poll_seconds) * 1000);
+                            }
+                        })
+                        .catch(function () {
+                            // Network hiccup - back off and try again rather than stopping forever.
+                            setTimeout(poll, 20000);
+                        });
+                }
+                poll();
+            })();
+        </script>
     {% endif %}
 
     {% if match.status == 'finished' %}

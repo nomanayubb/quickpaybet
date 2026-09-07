@@ -1,6 +1,6 @@
 from django.contrib import admin, messages
 
-from .models import Sport, Tournament, Match
+from .models import Sport, Tournament, Match, RealtimeOddsConfig
 from apps.bets.services import settle_bets_for_match
 from apps.exchange.services import settle_exchange_for_match
 
@@ -81,3 +81,19 @@ class MatchAdmin(admin.ModelAdmin):
             cancelled += 1
 
         self.message_user(request, f'{cancelled} match(es) cancelled and bets refunded.')
+
+
+@admin.register(RealtimeOddsConfig)
+class RealtimeOddsConfigAdmin(admin.ModelAdmin):
+    list_display = (
+        'is_enabled', 'live_refresh_seconds', 'not_started_refresh_seconds',
+        'proximity_boost_seconds', 'proximity_window_minutes',
+        'min_viewers_for_realtime', 'bet_acceptance_delay_seconds', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        # Singleton - only one row should ever exist.
+        return not RealtimeOddsConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False

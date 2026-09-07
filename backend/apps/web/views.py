@@ -30,7 +30,7 @@ from apps.exchange.services import place_order as place_exchange_order, cancel_o
 from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.cashback.models import CashbackCredit
 from apps.rewards.models import RewardPackage, UserRewardClaim
-from apps.sports.models import Match, Sport, Tournament
+from apps.sports.models import Match, Sport, Tournament, RealtimeOddsConfig
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
 from apps.payments.models import CryptoPayment
@@ -1705,15 +1705,18 @@ def match_detail_view(request, pk):
         try:
             selection = request.POST.get('selection')
             stake_raw = request.POST.get('stake')
+            odds_shown_raw = request.POST.get('odds_shown', '').strip()
             if not selection or not stake_raw:
                 raise ValidationError('Please provide selection and stake.')
 
             stake = Decimal(stake_raw)
+            odds_shown = Decimal(odds_shown_raw) if odds_shown_raw else None
             bet = place_bet(
                 user=request.user,
                 match_id=match.id,
                 selection=selection,
                 stake=stake,
+                odds_shown=odds_shown,
             )
             return redirect('web:match_detail', pk=match.pk)
         except SERVICE_ERRORS as exc:
@@ -1732,6 +1735,8 @@ def match_detail_view(request, pk):
             .order_by('-created_at')
         )
 
+    realtime_config = RealtimeOddsConfig.get_solo()
+
     return render(
         request,
         'web/match_detail.html',
@@ -1742,9 +1747,52 @@ def match_detail_view(request, pk):
             'my_exchange_orders': my_exchange_orders,
             'exchange_error': request.GET.get('exchange_error', ''),
             'exchange_message': request.GET.get('exchange_message', ''),
+            'realtime_enabled': realtime_config.is_enabled,
             'active': 'matches',
         },
     )
+
+
+def match_odds_poll_view(request, pk):
+    """
+    Read-only JSON endpoint for live odds polling. No auth required (odds
+    are public) - viewer identity for the "how many people are watching
+    this match" gate is the visitor's own session, created here if one
+    doesn't exist yet, which works uniformly for logged-in and anonymous
+    visitors.
+
+    Nothing here calls the real odds provider directly on every request -
+    apps.sports.realtime.maybe_refresh_sport_odds() only actually does that
+    at most once per configured interval per sport, regardless of how many
+    viewers are polling concurrently.
+    """
+    from apps.sports.realtime import (
+        get_effective_refresh_interval,
+        maybe_refresh_sport_odds,
+        record_viewer_heartbeat,
+    )
+
+    match = get_object_or_404(Match, pk=pk)
+    config = RealtimeOddsConfig.get_solo()
+
+    interval = get_effective_refresh_interval(match, config) if config.is_enabled else None
+
+    if interval is not None:
+        if not request.session.session_key:
+            request.session.save()
+        viewer_count = record_viewer_heartbeat(match, request.session.session_key, stale_after_seconds=interval * 3)
+        if viewer_count >= config.min_viewers_for_realtime:
+            maybe_refresh_sport_odds(match.sport, interval)
+            match.refresh_from_db(fields=['odds_home', 'odds_draw', 'odds_away'])
+
+    return JsonResponse({
+        'odds_home': str(match.odds_home) if match.odds_home is not None else None,
+        'odds_draw': str(match.odds_draw) if match.odds_draw is not None else None,
+        'odds_away': str(match.odds_away) if match.odds_away is not None else None,
+        'status': match.status,
+        'should_continue_polling': interval is not None,
+        'next_poll_seconds': interval or 60,
+    })
 
 @login_required
 def place_bet_view(request, pk):
