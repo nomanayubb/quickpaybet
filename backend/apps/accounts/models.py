@@ -1,4 +1,7 @@
+from decimal import Decimal
+
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -64,6 +67,7 @@ class User(AbstractUser):
         decimal_places=2,
         null=True,
         blank=True,
+        validators=[MinValueValidator(Decimal('0')), MaxValueValidator(Decimal('99'))],
         verbose_name=_('Cashback rate % override (blank = inherit global default)'),
     )
     cashback_wagering_multiplier_override = models.DecimalField(
@@ -71,6 +75,7 @@ class User(AbstractUser):
         decimal_places=2,
         null=True,
         blank=True,
+        validators=[MinValueValidator(Decimal('0')), MaxValueValidator(Decimal('20'))],
         verbose_name=_('Cashback wagering multiplier override (blank = inherit global default)'),
     )
     created_at = models.DateTimeField(auto_now_add=True)
