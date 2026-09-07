@@ -877,11 +877,12 @@ def admin_user_detail_view(request, user_id):
     withdrawal, every bet and parlay bet. This is what an admin needs to
     actually investigate a user, not just edit their role/limits.
 
-    Each of the four history boxes (wallet transactions, deposits/
-    withdrawals, single bets, parlay bets) has its own independent search
-    box, date range (Pakistan time, like every other admin filter), and
-    pagination - prefixed wt_/cp_/sb_/pb_ respectively so they never
-    collide with each other's query params on one page.
+    Each of the five history boxes (wallet transactions, commission earned
+    from downstream users, deposits/withdrawals, single bets, parlay bets)
+    has its own independent search box, date range (Pakistan time, like
+    every other admin filter), and pagination - prefixed
+    wt_/ch_/cp_/sb_/pb_ respectively so they never collide with each
+    other's query params on one page.
     """
     from django.db.models import Q
 
@@ -925,6 +926,22 @@ def admin_user_detail_view(request, user_id):
     transactions_qs, wt_date_from, wt_date_to = date_filtered(transactions_qs, 'created_at', 'wt')
     transactions_page = paginated(transactions_qs, 'wt')
 
+    # --- Commission history (earned as this user's downstream children lose bets) ---
+    from django.db.models import Sum
+
+    commission_all_time = WalletTransaction.objects.filter(
+        wallet=wallet, txn_type=WalletTransaction.TxnType.COMMISSION,
+    ).aggregate(s=Sum('amount'))['s'] or Decimal('0')
+
+    ch_q = request.GET.get('ch_q', '').strip()
+    commissions_qs = WalletTransaction.objects.filter(
+        wallet=wallet, txn_type=WalletTransaction.TxnType.COMMISSION,
+    ).order_by('-created_at')
+    if ch_q:
+        commissions_qs = commissions_qs.filter(description__icontains=ch_q)
+    commissions_qs, ch_date_from, ch_date_to = date_filtered(commissions_qs, 'created_at', 'ch')
+    commissions_page = paginated(commissions_qs, 'ch')
+
     # --- Deposits / withdrawals ---
     cp_q = request.GET.get('cp_q', '').strip()
     payments_qs = CryptoPayment.objects.filter(user=target).order_by('-created_at')
@@ -965,6 +982,9 @@ def admin_user_detail_view(request, user_id):
             'wallet': wallet,
             'transactions_page': transactions_page,
             'wt_q': wt_q, 'wt_date_from': wt_date_from, 'wt_date_to': wt_date_to,
+            'commission_all_time': commission_all_time,
+            'commissions_page': commissions_page,
+            'ch_q': ch_q, 'ch_date_from': ch_date_from, 'ch_date_to': ch_date_to,
             'payments_page': payments_page,
             'cp_q': cp_q, 'cp_date_from': cp_date_from, 'cp_date_to': cp_date_to,
             'bets_page': bets_page,
