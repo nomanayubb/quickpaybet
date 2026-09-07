@@ -6,6 +6,14 @@
     <title>QuickPayBet</title>
     <style>
         * { box-sizing: border-box; }
+        /* The native [hidden] attribute defaults to display:none, but any
+           class that sets its own `display` (e.g. .btn's inline-block) wins
+           at equal CSS specificity as an author-stylesheet rule - silently
+           defeating `el.hidden = true` in JS. Found live: the manual
+           "Refresh Odds" button (class="btn", toggled via .hidden) stayed
+           visually visible on every match regardless of refresh mode, even
+           though the JS and backend were both computing the correct value. */
+        [hidden] { display: none !important; }
         body {
             font-family: Arial, sans-serif;
             margin: 0;
