@@ -11,7 +11,7 @@ from apps.bets.services import place_bet
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
-from .models import Match, RealtimeOddsConfig, Sport
+from .models import Match, OddsHistoryEntry, RealtimeOddsConfig, Sport
 from .providers import (
     BaseOddsProvider,
     MockOddsProvider,
@@ -314,6 +314,42 @@ class MaybeRefreshSportOddsTests(TestCase):
 
         self.assertFalse(second_result)
         provider.fetch_matches.assert_called_once()  # not called a second time
+
+    def test_history_not_recorded_when_toggle_off(self):
+        provider = self._mock_provider()
+        with patch('apps.sports.realtime.get_odds_provider', return_value=provider):
+            maybe_refresh_sport_odds(self.sport, 20)
+        self.assertEqual(OddsHistoryEntry.objects.count(), 0)
+
+    def test_history_recorded_when_toggle_on(self):
+        config = RealtimeOddsConfig.get_solo()
+        config.store_full_odds_history = True
+        config.save()
+
+        provider = self._mock_provider()
+        with patch('apps.sports.realtime.get_odds_provider', return_value=provider):
+            maybe_refresh_sport_odds(self.sport, 20)
+
+        entry = OddsHistoryEntry.objects.get()
+        self.assertEqual(entry.match_id, self.match.id)
+        self.match.refresh_from_db()
+        self.assertEqual(entry.odds_home, self.match.odds_home)
+
+    def test_no_matching_row_writes_no_history_even_when_enabled(self):
+        config = RealtimeOddsConfig.get_solo()
+        config.store_full_odds_history = True
+        config.save()
+
+        provider = MagicMock()
+        provider.fetch_matches.return_value = [{
+            'home_team': 'Nobody', 'away_team': 'Here',
+            'start_time': self.match.start_time.isoformat(),
+            'odds_home': '2.00', 'odds_draw': '3.00', 'odds_away': '4.00',
+        }]
+        with patch('apps.sports.realtime.get_odds_provider', return_value=provider):
+            maybe_refresh_sport_odds(self.sport, 20)
+
+        self.assertEqual(OddsHistoryEntry.objects.count(), 0)
 
 
 class PlaceBetOddsRevalidationTests(TestCase):

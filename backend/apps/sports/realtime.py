@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .models import Match, RealtimeOddsConfig, Sport
+from .models import Match, OddsHistoryEntry, RealtimeOddsConfig, Sport
 from .pricing import normalize_odds
 from .providers import get_odds_provider
 
@@ -70,6 +70,13 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
     odds endpoint returns a whole sport's matches per call, not one at a
     time, so this is also the most credit-efficient shape, not just the
     simplest one.
+
+    Match.odds_home/draw/away are always overwritten in place (the "only
+    keep the latest value" behavior, on by default, costs nothing extra in
+    storage). A full per-refresh history (OddsHistoryEntry) is additionally
+    written only when RealtimeOddsConfig.store_full_odds_history is on -
+    off by default, so this feature costs nothing until an admin
+    deliberately opts into it.
     """
     if not sport.provider_key:
         return False
@@ -83,6 +90,12 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
     except Exception:
         return False
 
+    # Only read once per call, not once per match, and never at all unless
+    # a fetch is actually happening - keeping this out of the hot path
+    # when there's nothing to refresh.
+    keep_history = RealtimeOddsConfig.get_solo().store_full_odds_history
+    history_entries = []
+
     for item in items:
         start_time = parse_datetime(item['start_time'])
         if not start_time:
@@ -94,12 +107,27 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
         except (ValueError, ZeroDivisionError, InvalidOperation):
             continue
 
-        Match.objects.filter(
+        matches = list(Match.objects.filter(
             sport=sport,
             home_team=item['home_team'],
             away_team=item['away_team'],
             start_time=start_time,
             status__in=[Match.Status.SCHEDULED, Match.Status.LIVE],
-        ).update(odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away)
+        ))
+        if not matches:
+            continue
+
+        Match.objects.filter(pk__in=[m.pk for m in matches]).update(
+            odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+        )
+
+        if keep_history:
+            history_entries.extend(
+                OddsHistoryEntry(match=m, odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away)
+                for m in matches
+            )
+
+    if history_entries:
+        OddsHistoryEntry.objects.bulk_create(history_entries)
 
     return True

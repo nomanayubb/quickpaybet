@@ -147,6 +147,10 @@ class RealtimeOddsConfig(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(30)],
         verbose_name='Odds re-validation window (seconds) at bet placement',
     )
+    store_full_odds_history = models.BooleanField(
+        default=False,
+        verbose_name='Keep a full history row every time odds refresh (off = only the latest value is kept, on Match itself)',
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -160,3 +164,31 @@ class RealtimeOddsConfig(models.Model):
     def get_solo(cls) -> 'RealtimeOddsConfig':
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class OddsHistoryEntry(models.Model):
+    """
+    One row per odds refresh, only ever written when
+    RealtimeOddsConfig.store_full_odds_history is on (default off - this
+    table stays empty and costs nothing unless an admin explicitly opts
+    in). Purely a historical/analytics log - it has no bearing on
+    settlement or any money movement, which always reads from Match's own
+    current odds_home/draw/away fields regardless of this setting.
+    """
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name='odds_history',
+    )
+    odds_home = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    odds_draw = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    odds_away = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-recorded_at']
+        verbose_name = 'Odds History Entry'
+        verbose_name_plural = 'Odds History Entries'
+
+    def __str__(self):
+        return f'{self.match} @ {self.recorded_at:%Y-%m-%d %H:%M:%S}'

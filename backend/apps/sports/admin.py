@@ -1,6 +1,6 @@
 from django.contrib import admin, messages
 
-from .models import Sport, Tournament, Match, RealtimeOddsConfig
+from .models import Sport, Tournament, Match, RealtimeOddsConfig, OddsHistoryEntry
 from apps.bets.services import settle_bets_for_match
 from apps.exchange.services import settle_exchange_for_match
 
@@ -88,7 +88,8 @@ class RealtimeOddsConfigAdmin(admin.ModelAdmin):
     list_display = (
         'is_enabled', 'live_refresh_seconds', 'not_started_refresh_seconds',
         'proximity_boost_seconds', 'proximity_window_minutes',
-        'min_viewers_for_realtime', 'bet_acceptance_delay_seconds', 'updated_at',
+        'min_viewers_for_realtime', 'bet_acceptance_delay_seconds',
+        'store_full_odds_history', 'updated_at',
     )
 
     def has_add_permission(self, request):
@@ -96,4 +97,18 @@ class RealtimeOddsConfigAdmin(admin.ModelAdmin):
         return not RealtimeOddsConfig.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(OddsHistoryEntry)
+class OddsHistoryEntryAdmin(admin.ModelAdmin):
+    list_display = ('match', 'odds_home', 'odds_draw', 'odds_away', 'recorded_at')
+    list_filter = ('match__sport',)
+    search_fields = ('match__home_team', 'match__away_team')
+    date_hierarchy = 'recorded_at'
+    readonly_fields = ('match', 'odds_home', 'odds_draw', 'odds_away', 'recorded_at')
+
+    def has_add_permission(self, request):
+        # Only ever written automatically by apps.sports.realtime - never
+        # manually created.
         return False
