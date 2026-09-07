@@ -111,7 +111,7 @@ class Match(models.Model):
         decimal_places=2,
         null=True,
         blank=True,
-        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        validators=[MinValueValidator(Decimal('-99.00')), MaxValueValidator(Decimal('99.00'))],
         verbose_name='Odds adjustment override (added to every odds value; blank = use the global default)',
     )
     lay_spread_override = models.DecimalField(
@@ -235,17 +235,17 @@ class OddsAdjustmentConfig(models.Model):
     Match can override this default via its own odds_adjustment field;
     None there means "use this global default".
 
-    Bounded to -10.00..10.00 (the exact range requested) so an admin can
-    never enter a value that, by itself, is out of range - the actual
-    floor against the database going nonsensical (odds dropping to/below
-    1.00) is enforced separately in apply_odds_adjustment, since even an
-    in-range adjustment can push a short-priced favorite's odds too low.
+    Bounded to -99.00..99.00 so an admin can never enter a wildly
+    out-of-range value by mistake - the actual floor against the database
+    going nonsensical (odds dropping to/below 1.00) is enforced separately
+    in apply_odds_adjustment, since even an in-range adjustment can push a
+    short-priced favorite's odds too low.
     """
     default_adjustment = models.DecimalField(
         max_digits=4,
         decimal_places=2,
         default=Decimal('0.00'),
-        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        validators=[MinValueValidator(Decimal('-99.00')), MaxValueValidator(Decimal('99.00'))],
         verbose_name='Default odds adjustment (added to every match\'s odds unless a match overrides it)',
     )
     updated_at = models.DateTimeField(auto_now=True)
@@ -343,7 +343,7 @@ class HouseLiquidityConfig(models.Model):
     )
     default_lay_relative_delta = models.DecimalField(
         max_digits=4, decimal_places=2, null=True, blank=True,
-        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        validators=[MinValueValidator(Decimal('-99.00')), MaxValueValidator(Decimal('99.00'))],
         verbose_name='Default relative lay delta (used when default_lay_mode = relative; same delta applied to each selection\'s own back)',
     )
     default_lay_custom_value_home = models.DecimalField(
@@ -406,22 +406,31 @@ class OddsHistoryEntry(models.Model):
 
 class UserMatchOddsOverride(models.Model):
     """
-    The most specific level of the odds-adjustment cascade: one specific
-    user's adjustment on one specific match, taking precedence over both
-    User.odds_adjustment_override (that user, every match) and
-    Match.odds_adjustment (every user, that match). See
-    apps.sports.pricing.resolve_user_extra_adjustment() for the full
-    resolution order.
+    The most specific level of two independent per-(user, match) cascades,
+    sharing one row since they're both keyed the same way:
 
-    Applies only to the fixed-odds sportsbook (apps.bets) - there is no
-    equivalent concept on the exchange (apps.exchange), whose order book
-    is one shared, matched market by definition.
+    - `adjustment`: the odds-adjustment cascade - takes precedence over both
+      User.odds_adjustment_override (that user, every match) and
+      Match.odds_adjustment (every user, that match). See
+      apps.sports.pricing.resolve_user_extra_adjustment().
+    - `lay_spread_override`: the lay-spread-reference cascade - takes
+      precedence over both User.lay_spread_override (that user, every
+      match) and Match.lay_spread_override (every user, that match). See
+      apps.sports.pricing.resolve_user_extra_lay_spread(). Sportsbook
+      display only - never seeds the exchange's house liquidity.
+
+    Both fields are independently optional (a row can set just one), so at
+    least one must be set - see clean().
+
+    Either override applies only to the fixed-odds sportsbook (apps.bets)
+    - there is no equivalent concept on the exchange (apps.exchange), whose
+    order book is one shared, matched market by definition.
 
     Every row in this table's admin changelist IS the "override is
     active" alert by definition; deleting a row is the reset-to-default
-    action - no separate flag/action needed here unlike the other three
-    levels, which live as nullable fields an admin could otherwise forget
-    are set.
+    action - no separate flag/action needed here unlike the User/Match
+    single-field levels, which live as nullable fields an admin could
+    otherwise forget are set.
     """
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -436,8 +445,18 @@ class UserMatchOddsOverride(models.Model):
     adjustment = models.DecimalField(
         max_digits=4,
         decimal_places=2,
-        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
-        verbose_name='Odds adjustment for this user on this match',
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('-99.00')), MaxValueValidator(Decimal('99.00'))],
+        verbose_name='Odds adjustment for this user on this match (blank = no extra change to odds)',
+    )
+    lay_spread_override = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('5.00'))],
+        verbose_name='Lay-reference spread for this user on this match (blank = no extra change; sportsbook display only)',
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -447,8 +466,20 @@ class UserMatchOddsOverride(models.Model):
         verbose_name = 'User/Match Odds Override'
         verbose_name_plural = 'User/Match Odds Overrides'
 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.adjustment is None and self.lay_spread_override is None:
+            raise ValidationError(
+                'Set at least one of adjustment or lay_spread_override - a row with neither has nothing to override.'
+            )
+
     def __str__(self):
-        return f'{self.user} @ {self.match}: {self.adjustment:+}'
+        parts = []
+        if self.adjustment is not None:
+            parts.append(f'adj {self.adjustment:+}')
+        if self.lay_spread_override is not None:
+            parts.append(f'lay spread {self.lay_spread_override}')
+        return f'{self.user} @ {self.match}: {", ".join(parts) or "—"}'
 
 
 class PricingOverride(models.Model):
@@ -511,7 +542,7 @@ class PricingOverride(models.Model):
     lay_mode = models.CharField(max_length=10, choices=LayMode.choices, default=LayMode.API_LAY)
     lay_relative_delta = models.DecimalField(
         max_digits=4, decimal_places=2, null=True, blank=True,
-        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        validators=[MinValueValidator(Decimal('-99.00')), MaxValueValidator(Decimal('99.00'))],
         verbose_name='Relative lay delta (used when lay_mode = relative; same delta applied to each selection\'s own back)',
     )
     lay_custom_value_home = models.DecimalField(

@@ -13,7 +13,7 @@ from .models import User, PasswordResetToken
 class CustomUserAdmin(UserAdmin):
     list_display = (
         'email', 'role', 'parent', 'commission_rate', 'is_staff', 'is_active',
-        'is_house_account', 'odds_override_flag',
+        'is_house_account', 'odds_override_flag', 'lay_spread_override_flag',
     )
     list_filter = ('role', 'is_staff', 'is_active')
     ordering = ('email',)
@@ -23,7 +23,7 @@ class CustomUserAdmin(UserAdmin):
     # another admin's autocomplete_fields, would otherwise crash with a
     # FieldError the moment anyone actually typed a search query.
     search_fields = ('email',)
-    actions = ['reset_odds_adjustment_override']
+    actions = ['reset_odds_adjustment_override', 'reset_lay_spread_override']
 
     @admin.display(description='Odds override')
     def odds_override_flag(self, obj):
@@ -33,6 +33,15 @@ class CustomUserAdmin(UserAdmin):
     def reset_odds_adjustment_override(self, request, queryset):
         updated = queryset.exclude(odds_adjustment_override=None).update(odds_adjustment_override=None)
         self.message_user(request, f'Cleared the odds adjustment override on {updated} user(s).')
+
+    @admin.display(description='Lay-spread override')
+    def lay_spread_override_flag(self, obj):
+        return 'Active' if obj.lay_spread_override is not None else ''
+
+    @admin.action(description='Reset per-user lay-spread override to default (blank)')
+    def reset_lay_spread_override(self, request, queryset):
+        updated = queryset.exclude(lay_spread_override=None).update(lay_spread_override=None)
+        self.message_user(request, f'Cleared the lay-spread override on {updated} user(s).')
 
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
@@ -46,6 +55,7 @@ class CustomUserAdmin(UserAdmin):
                 'max_bet_amount',
                 'is_betting_enabled',
                 'odds_adjustment_override',
+                'lay_spread_override',
             )
         }),
         ('Permissions', {

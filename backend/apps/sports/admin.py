@@ -190,14 +190,16 @@ class HouseLiquidityConfigAdmin(admin.ModelAdmin):
 class UserMatchOddsOverrideAdmin(admin.ModelAdmin):
     """
     Every row here IS the alert - its mere existence means a specific
-    user has a specific-match odds override active. Deleting a row (via
-    Django admin's own bulk delete, no custom action needed) is exactly
-    the reset-to-default action: the resolution cascade
-    (apps.sports.pricing.resolve_user_extra_adjustment) automatically
-    falls back to that user's global override or the site default the
-    moment the row is gone.
+    user has a specific-match odds and/or lay-spread override active
+    (either field may be blank; clean() requires at least one). Deleting
+    a row (via Django admin's own bulk delete, no custom action needed)
+    is exactly the reset-to-default action: the resolution cascades
+    (apps.sports.pricing.resolve_user_extra_adjustment/
+    resolve_user_extra_lay_spread) automatically fall back to that
+    user's global override or the site default the moment the row is
+    gone.
     """
-    list_display = ('user', 'match', 'adjustment', 'updated_at')
+    list_display = ('user', 'match', 'adjustment', 'lay_spread_override', 'updated_at')
     search_fields = ('user__email', 'match__home_team', 'match__away_team')
     list_filter = ('match__sport',)
     autocomplete_fields = ('user', 'match')

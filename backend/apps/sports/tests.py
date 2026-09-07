@@ -28,6 +28,7 @@ from .pricing import (
     resolve_effective_lay_spread,
     resolve_match_pricing_mode,
     resolve_user_extra_adjustment,
+    resolve_user_extra_lay_spread,
     resolve_user_pricing_mode,
 )
 from .providers import (
@@ -428,6 +429,33 @@ class OddsAdjustmentPricingTests(TestCase):
         self.assertEqual(home, Decimal('3.00'))
         self.assertEqual(away, Decimal('5.00'))
 
+    def test_large_positive_and_negative_adjustments_apply_correctly(self):
+        # The client's own worked example: 2.20 +1.40 = 3.60, then -1.40 back
+        # to 2.20, confirming large jumps (not just small tweaks) are exact.
+        home, _, _ = apply_odds_adjustment(Decimal('1.40'), Decimal('2.20'), None, Decimal('4.00'))
+        self.assertEqual(home, Decimal('3.60'))
+        home, _, _ = apply_odds_adjustment(Decimal('-1.40'), Decimal('3.60'), None, Decimal('4.00'))
+        self.assertEqual(home, Decimal('2.20'))
+        home, _, _ = apply_odds_adjustment(Decimal('40'), Decimal('2.20'), None, Decimal('4.00'))
+        self.assertEqual(home, Decimal('42.20'))
+
+    def test_odds_adjustment_range_widened_to_99(self):
+        # Field-level range was originally +-10.00 and was widened to +-99.00
+        # at the client's explicit request (no artificial cap on how far an
+        # admin can move odds away from the live API price).
+        sport = Sport.objects.create(name='RangeTest Sport', slug='rangetest-sport')
+        match = Match.objects.create(
+            sport=sport, home_team='RangeTest Home', away_team='RangeTest Away',
+            start_time=timezone.now() + timezone.timedelta(hours=1), odds_home=Decimal('2.00'),
+        )
+        match.odds_adjustment = Decimal('99.00')
+        match.full_clean()
+        match.odds_adjustment = Decimal('-99.00')
+        match.full_clean()
+        match.odds_adjustment = Decimal('99.01')
+        with self.assertRaises(ValidationError):
+            match.full_clean()
+
     def test_resolve_effective_adjustment_prefers_match_override(self):
         self.assertEqual(
             resolve_effective_adjustment(Decimal('2.00'), Decimal('0.00')), Decimal('2.00'),
@@ -619,6 +647,132 @@ class PerUserOddsOverrideTests(TestCase):
         self.assertEqual(odds, (Decimal('2.00'), Decimal('3.00'), Decimal('4.00')))
 
 
+class PerUserLaySpreadOverrideTests(TestCase):
+    """
+    Mirrors PerUserOddsOverrideTests exactly, but for the lay-spread-
+    reference cascade (resolve_user_extra_lay_spread /
+    get_effective_lay_reference_for_user) added on top of the existing
+    2-level (global/match) resolve_effective_lay_spread.
+    """
+    def setUp(self):
+        HouseLiquidityConfig.objects.filter(pk=1).delete()
+        self.config = HouseLiquidityConfig.objects.create(pk=1, default_lay_spread=Decimal('0.10'))
+
+        self.sport = Sport.objects.create(name='PerUserLaySport', slug='per-user-lay-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.other_match = Match.objects.create(
+            sport=self.sport, home_team='H2', away_team='A2',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('5.00'), odds_draw=Decimal('6.00'), odds_away=Decimal('7.00'),
+        )
+        self.user = User.objects.create_user(email='layspreadoverride@example.com', password='testpass123')
+        self.other_user = User.objects.create_user(email='layspreadother@example.com', password='testpass123')
+
+    def test_no_override_anywhere_returns_none(self):
+        self.assertIsNone(resolve_user_extra_lay_spread(self.user, self.match))
+
+    def test_none_user_returns_none(self):
+        self.assertIsNone(resolve_user_extra_lay_spread(None, self.match))
+
+    def test_anonymous_user_returns_none(self):
+        self.assertIsNone(resolve_user_extra_lay_spread(AnonymousUser(), self.match))
+
+    def test_user_global_override_applies_to_any_match(self):
+        self.user.lay_spread_override = Decimal('0.50')
+        self.user.save(update_fields=['lay_spread_override'])
+        self.assertEqual(resolve_user_extra_lay_spread(self.user, self.match), Decimal('0.50'))
+        self.assertEqual(resolve_user_extra_lay_spread(self.user, self.other_match), Decimal('0.50'))
+
+    def test_user_match_specific_override_beats_user_global_override(self):
+        self.user.lay_spread_override = Decimal('0.50')
+        self.user.save(update_fields=['lay_spread_override'])
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, lay_spread_override=Decimal('2.00'))
+
+        self.assertEqual(resolve_user_extra_lay_spread(self.user, self.match), Decimal('2.00'))
+        # The other match isn't covered by the specific override - falls
+        # back to this user's global override.
+        self.assertEqual(resolve_user_extra_lay_spread(self.user, self.other_match), Decimal('0.50'))
+
+    def test_row_with_only_adjustment_set_falls_back_to_user_global_for_lay_spread(self):
+        # A UserMatchOddsOverride row that only sets `adjustment` (leaves
+        # lay_spread_override=None) must still fall through to the user's
+        # own lay_spread_override, not be treated as an explicit "no spread".
+        self.user.lay_spread_override = Decimal('0.75')
+        self.user.save(update_fields=['lay_spread_override'])
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, adjustment=Decimal('1.00'))
+        self.assertEqual(resolve_user_extra_lay_spread(self.user, self.match), Decimal('0.75'))
+
+    def test_row_with_only_lay_spread_set_falls_back_to_user_global_for_adjustment(self):
+        # The inverse: a row that only sets lay_spread_override must not
+        # be mistaken for an explicit "zero adjustment" - it should fall
+        # through to the user's own odds_adjustment_override.
+        self.user.odds_adjustment_override = Decimal('0.30')
+        self.user.save(update_fields=['odds_adjustment_override'])
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, lay_spread_override=Decimal('0.75'))
+        self.assertEqual(resolve_user_extra_adjustment(self.user, self.match), Decimal('0.30'))
+
+    def test_get_effective_lay_reference_for_user_applies_user_global_override(self):
+        self.user.lay_spread_override = Decimal('2.00')
+        self.user.save(update_fields=['lay_spread_override'])
+        lay_home, lay_draw, lay_away = get_effective_lay_reference_for_user(self.match, self.user)
+        self.assertEqual(lay_home, Decimal('4.00'))  # 2.00 + 2.00
+        self.assertEqual(lay_draw, Decimal('5.00'))  # 3.00 + 2.00
+        self.assertEqual(lay_away, Decimal('6.00'))  # 4.00 + 2.00
+
+    def test_get_effective_lay_reference_for_user_match_specific_beats_user_global(self):
+        self.user.lay_spread_override = Decimal('0.50')
+        self.user.save(update_fields=['lay_spread_override'])
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, lay_spread_override=Decimal('2.00'))
+        lay_home, _, _ = get_effective_lay_reference_for_user(self.match, self.user)
+        self.assertEqual(lay_home, Decimal('4.00'))  # 2.00 + 2.00, not 2.00 + 0.50
+
+    def test_second_user_and_anonymous_unaffected_by_first_users_override(self):
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, lay_spread_override=Decimal('2.00'))
+
+        # A second, real, distinct user on the same match sees the
+        # unmodified match/global lay reference (2.00 + 0.10 default).
+        lay_home_other, _, _ = get_effective_lay_reference_for_user(self.match, self.other_user)
+        self.assertEqual(lay_home_other, Decimal('2.10'))
+
+        # So does an anonymous viewer.
+        lay_home_anon, _, _ = get_effective_lay_reference_for_user(self.match, AnonymousUser())
+        self.assertEqual(lay_home_anon, Decimal('2.10'))
+
+    def test_never_touches_the_shared_match_row(self):
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, lay_spread_override=Decimal('2.00'))
+        get_effective_lay_reference_for_user(self.match, self.user)
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.lay_spread_override)
+
+
+class UserMatchOddsOverrideValidationTests(TestCase):
+    def setUp(self):
+        self.sport = Sport.objects.create(name='ValidationSport', slug='validation-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'),
+        )
+        self.user = User.objects.create_user(email='validationoverride@example.com', password='testpass123')
+
+    def test_both_null_rejected_by_clean(self):
+        override = UserMatchOddsOverride(user=self.user, match=self.match)
+        with self.assertRaises(ValidationError):
+            override.full_clean()
+
+    def test_lay_spread_only_is_valid(self):
+        override = UserMatchOddsOverride(user=self.user, match=self.match, lay_spread_override=Decimal('0.50'))
+        override.full_clean()  # must not raise
+
+    def test_adjustment_only_is_valid(self):
+        override = UserMatchOddsOverride(user=self.user, match=self.match, adjustment=Decimal('0.50'))
+        override.full_clean()  # must not raise
+
+
 class OddsAdjustmentAdminResetActionTests(TestCase):
     def _admin_request(self):
         # message_user() (called by every reset action) needs a request
@@ -665,6 +819,18 @@ class OddsAdjustmentAdminResetActionTests(TestCase):
         admin_instance.reset_odds_adjustment_override(self._admin_request(), User.objects.filter(pk=self.user.pk))
         self.user.refresh_from_db()
         self.assertIsNone(self.user.odds_adjustment_override)
+
+    def test_user_reset_lay_spread_action_clears_override(self):
+        from django.contrib import admin as django_admin
+        from apps.accounts.admin import CustomUserAdmin
+
+        self.user.lay_spread_override = Decimal('2.00')
+        self.user.save(update_fields=['lay_spread_override'])
+
+        admin_instance = CustomUserAdmin(User, django_admin.site)
+        admin_instance.reset_lay_spread_override(self._admin_request(), User.objects.filter(pk=self.user.pk))
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.lay_spread_override)
 
     def test_global_config_reset_action_clears_to_zero(self):
         from django.contrib import admin as django_admin
@@ -861,6 +1027,20 @@ class PricingModeResolutionTests(TestCase):
         PricingOverride.objects.create(match=self.match, lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('0.40'))
         lay_home, _, _ = get_effective_lay_reference_for_user(self.match, self.user)
         self.assertEqual(lay_home, Decimal('2.40'))  # 2.00 + 0.40, no user override present
+
+    def test_get_effective_lay_reference_for_user_respects_match_lay_spread_override(self):
+        # Real bug found while auditing the client's original spec: in pure
+        # API mode (no PricingOverride at all), this function used to always
+        # read the GLOBAL default_lay_spread, ignoring Match.lay_spread_override
+        # entirely - so the real exchange order book (which does use the match
+        # override, via resolve_effective_lay_spread in apps.exchange.services)
+        # and the sportsbook's own lay-reference display would disagree for
+        # the exact same match. Global default here is 0.10 (see setUp).
+        self.match.lay_spread_override = Decimal('0.50')
+        self.match.save(update_fields=['lay_spread_override'])
+        lay_home, _, _ = get_effective_lay_reference_for_user(self.match, self.user)
+        self.assertEqual(lay_home, Decimal('2.50'))  # 2.00 + 0.50 (match override), not 2.10 (global)
+
 
 
 class RefreshModeResolutionTests(TestCase):

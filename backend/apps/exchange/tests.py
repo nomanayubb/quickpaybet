@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from apps.sports.models import BackMode, HouseLiquidityConfig, LayMode, PricingOverride, Sport, Match
+from apps.sports.models import BackMode, HouseLiquidityConfig, LayMode, PricingOverride, Sport, Match, UserMatchOddsOverride
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
@@ -561,6 +561,18 @@ class HouseLaySeedingTests(TestCase):
         # Back is the genuine, unmodified Pinnacle price - never adjusted.
         self.assertEqual(back_order.odds, Decimal('2.00'))
         self.assertEqual(lay_order.odds, Decimal('2.10'))  # 2.00 back + 0.10 spread
+
+    def test_house_lay_order_unaffected_by_per_user_lay_spread_override(self):
+        # Architectural boundary check: a per-user lay-spread override
+        # (sportsbook display only) must never leak into the one shared,
+        # matched exchange order book that sync_house_orders_for_match
+        # seeds for everyone.
+        UserMatchOddsOverride.objects.create(
+            user=self.real_user, match=self.match, lay_spread_override=Decimal('4.00'),
+        )
+        sync_house_orders_for_match(self.match)
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='lay')
+        self.assertEqual(lay_order.odds, Decimal('2.10'))  # still 2.00 + 0.10 global, not 2.00 + 4.00
 
     def test_house_seeds_both_sides_of_all_three_selections_for_3way_match(self):
         sync_house_orders_for_match(self.match)

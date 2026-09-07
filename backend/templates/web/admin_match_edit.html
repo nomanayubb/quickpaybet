@@ -43,8 +43,8 @@
             <input type="number" name="odds_away" step="0.01" min="1.01" value="{{ match.odds_away|default_if_none:'' }}">
         </div>
         <div class="form-group">
-            <label>Odds adjustment override (-10.00 to 10.00, blank = use site-wide default)</label>
-            <input type="number" name="odds_adjustment" step="0.01" min="-10.00" max="10.00" value="{{ match.odds_adjustment|default_if_none:'' }}">
+            <label>Odds adjustment override (-99.00 to 99.00, blank = use site-wide default)</label>
+            <input type="number" name="odds_adjustment" step="0.01" min="-99.00" max="99.00" value="{{ match.odds_adjustment|default_if_none:'' }}">
         </div>
         <button type="submit" class="btn">Save match</button>
     </form>

@@ -88,8 +88,19 @@ class User(AbstractUser):
         decimal_places=2,
         null=True,
         blank=True,
-        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        validators=[MinValueValidator(Decimal('-99.00')), MaxValueValidator(Decimal('99.00'))],
         verbose_name=_('Odds adjustment override for this user, all matches (blank = no extra change)'),
+    )
+    lay_spread_override = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('5.00'))],
+        verbose_name=_(
+            'Lay-reference spread override for this user, all matches '
+            '(blank = no extra change; sportsbook display only, never the exchange)'
+        ),
     )
 
     USERNAME_FIELD = 'email'

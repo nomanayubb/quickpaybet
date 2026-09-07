@@ -184,11 +184,17 @@ def compute_lay_price(back_odds, spread: Decimal):
 def resolve_user_extra_adjustment(user, match) -> Decimal:
     """
     Most-specific-wins resolution for the per-user odds-override cascade:
-    a UserMatchOddsOverride row for this exact (user, match) pair, else
-    this user's own odds_adjustment_override (every match), else zero (no
-    extra change - the user sees exactly the standard match-level price).
-    `user` may be None or anonymous, in which case there is nothing to
-    look up and this always returns zero.
+    a UserMatchOddsOverride row's own `adjustment` for this exact
+    (user, match) pair if set, else this user's own
+    odds_adjustment_override (every match), else zero (no extra change -
+    the user sees exactly the standard match-level price). `user` may be
+    None or anonymous, in which case there is nothing to look up and this
+    always returns zero.
+
+    A UserMatchOddsOverride row may exist but have `adjustment=None` (it
+    exists only to carry a lay_spread_override instead) - that must fall
+    through to the next level exactly like no row existing at all, not be
+    treated as an explicit "zero adjustment".
     """
     if user is None or not getattr(user, 'is_authenticated', False):
         return Decimal('0')
@@ -196,11 +202,47 @@ def resolve_user_extra_adjustment(user, match) -> Decimal:
     from .models import UserMatchOddsOverride
 
     specific = UserMatchOddsOverride.objects.filter(user=user, match=match).first()
-    if specific is not None:
+    if specific is not None and specific.adjustment is not None:
         return specific.adjustment
     if user.odds_adjustment_override is not None:
         return user.odds_adjustment_override
     return Decimal('0')
+
+
+def resolve_user_extra_lay_spread(user, match) -> Optional[Decimal]:
+    """
+    Most-specific-wins resolution for the per-user lay-spread-reference
+    cascade, mirroring resolve_user_extra_adjustment(): a
+    UserMatchOddsOverride row's own lay_spread_override for this exact
+    (user, match) pair if set, else this user's own lay_spread_override
+    (every match), else None (no override - whatever
+    resolve_effective_lay_spread() already produced from Match/
+    HouseLiquidityConfig stands as-is). `user` may be None or anonymous,
+    in which case there is nothing to look up and this always returns
+    None.
+
+    Unlike resolve_user_extra_adjustment (a flat delta always ADDED to
+    the odds), this returns a REPLACEMENT spread value - lay spread
+    replaces, it never composes across levels, exactly like
+    Match.lay_spread_override already replaces (not adds to)
+    HouseLiquidityConfig.default_lay_spread one level down.
+
+    Display-only: never consulted by
+    apps.exchange.services.sync_house_orders_for_match, which stays on
+    the 2-level match/global resolve_effective_lay_spread() call - a
+    per-user value can never affect the one shared, matched order book.
+    """
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return None
+
+    from .models import UserMatchOddsOverride
+
+    specific = UserMatchOddsOverride.objects.filter(user=user, match=match).first()
+    if specific is not None and specific.lay_spread_override is not None:
+        return specific.lay_spread_override
+    if user.lay_spread_override is not None:
+        return user.lay_spread_override
+    return None
 
 
 def _mode_from_override(override) -> 'ResolvedPricingMode':
@@ -348,10 +390,15 @@ def get_effective_odds_for_user(match, user):
         return odds_home, odds_draw, odds_away
 
     from .models import HouseLiquidityConfig
-    default_spread = HouseLiquidityConfig.get_solo().default_lay_spread
-    back_home, _ = compute_back_and_lay(odds_home, user_mode, default_spread, 'home')
-    back_draw, _ = compute_back_and_lay(odds_draw, user_mode, default_spread, 'draw')
-    back_away, _ = compute_back_and_lay(odds_away, user_mode, default_spread, 'away')
+    effective_spread = resolve_effective_lay_spread(
+        match.lay_spread_override, HouseLiquidityConfig.get_solo().default_lay_spread,
+    )
+    user_spread = resolve_user_extra_lay_spread(user, match)
+    if user_spread is not None:
+        effective_spread = user_spread
+    back_home, _ = compute_back_and_lay(odds_home, user_mode, effective_spread, 'home')
+    back_draw, _ = compute_back_and_lay(odds_draw, user_mode, effective_spread, 'draw')
+    back_away, _ = compute_back_and_lay(odds_away, user_mode, effective_spread, 'away')
     return back_home, back_draw, back_away
 
 
@@ -367,8 +414,13 @@ def get_effective_lay_reference_for_user(match, user):
     mode = resolve_user_pricing_mode(user, match) or resolve_match_pricing_mode(match)
 
     from .models import HouseLiquidityConfig
-    default_spread = HouseLiquidityConfig.get_solo().default_lay_spread
-    _, lay_home = compute_back_and_lay(odds_home, mode, default_spread, 'home')
-    _, lay_draw = compute_back_and_lay(odds_draw, mode, default_spread, 'draw')
-    _, lay_away = compute_back_and_lay(odds_away, mode, default_spread, 'away')
+    effective_spread = resolve_effective_lay_spread(
+        match.lay_spread_override, HouseLiquidityConfig.get_solo().default_lay_spread,
+    )
+    user_spread = resolve_user_extra_lay_spread(user, match)
+    if user_spread is not None:
+        effective_spread = user_spread
+    _, lay_home = compute_back_and_lay(odds_home, mode, effective_spread, 'home')
+    _, lay_draw = compute_back_and_lay(odds_draw, mode, effective_spread, 'draw')
+    _, lay_away = compute_back_and_lay(odds_away, mode, effective_spread, 'away')
     return lay_home, lay_draw, lay_away
