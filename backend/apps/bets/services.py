@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.cashback.services import credit_cashback_for_loss, record_wager
 from apps.sports.models import Match
+from apps.sports.pricing import get_effective_odds_for_user
 from apps.wallet.models import Wallet, WalletTransaction
 from .models import Bet, ParlayBet, ParlayLeg
 
@@ -29,11 +30,21 @@ MAX_COMBINED_ODDS = Decimal('999999.99')
 BET_ODDS_TOLERANCE = Decimal('0.02')
 
 
-def _get_bet_odds(match: Match, selection: str) -> Decimal:
+def _get_bet_odds(match: Match, selection: str, user) -> Decimal:
+    """
+    Returns the odds this specific user is charged for `selection` on
+    `match` - the standard match-level price, unless an admin-configured
+    per-user or per-user-per-match override applies (see
+    apps.sports.pricing.get_effective_odds_for_user). Since Bet.odds is
+    set once from this return value and never re-read afterward, this is
+    the single point that makes a user's bet history, payout, and ledger
+    permanently reflect whatever rate they were actually charged.
+    """
+    odds_home, odds_draw, odds_away = get_effective_odds_for_user(match, user)
     odds_map = {
-        Bet.Selection.HOME: match.odds_home,
-        Bet.Selection.DRAW: match.odds_draw,
-        Bet.Selection.AWAY: match.odds_away,
+        Bet.Selection.HOME: odds_home,
+        Bet.Selection.DRAW: odds_draw,
+        Bet.Selection.AWAY: odds_away,
     }
     odds = odds_map.get(selection)
     if odds is None:
@@ -65,7 +76,7 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal, odds_shown: D
     if match.status not in (Match.Status.SCHEDULED, Match.Status.LIVE):
         raise ValidationError('Betting is closed for this match.')
 
-    odds = _get_bet_odds(match, selection)
+    odds = _get_bet_odds(match, selection, user)
 
     if odds_shown is not None and odds_shown > 0:
         relative_change = abs(odds - odds_shown) / odds_shown
@@ -222,7 +233,7 @@ def place_parlay_bet(user, stake: Decimal, selections: list):
         if match.status not in (Match.Status.SCHEDULED, Match.Status.LIVE):
             raise ValidationError('Betting is closed for this match.')
 
-        odds = _get_bet_odds(match, selection)
+        odds = _get_bet_odds(match, selection, user)
         combined_odds *= odds
         if combined_odds > MAX_COMBINED_ODDS:
             # Belt-and-braces on top of MAX_PARLAY_LEGS: a handful of

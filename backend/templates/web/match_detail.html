@@ -6,9 +6,9 @@
     <p><strong>Start:</strong> {{ match.start_time }}</p>
     <p><strong>Status:</strong> {{ match.status }}</p>
     <p><strong>Odds:</strong><br>
-        Home: <span id="odds-home">{{ match.odds_home|default:"-" }}</span><br>
-        Draw: <span id="odds-draw">{{ match.odds_draw|default:"-" }}</span><br>
-        Away: <span id="odds-away">{{ match.odds_away|default:"-" }}</span>
+        Home: <span id="odds-home">{{ display_odds_home|default:"-" }}</span><br>
+        Draw: <span id="odds-draw">{{ display_odds_draw|default:"-" }}</span><br>
+        Away: <span id="odds-away">{{ display_odds_away|default:"-" }}</span>
     </p>
 
     {% if match.status == 'live' or match.status == 'scheduled' %}
@@ -24,16 +24,16 @@
                 <div class="form-group">
                     <label>Selection</label>
                     <select name="selection" id="bet-selection">
-                        <option value="home" data-odds="{{ match.odds_home|default:'' }}">Home – <span class="opt-odds-home">{{ match.odds_home|default:"-" }}</span></option>
-                        {% if match.odds_draw %}<option value="draw" data-odds="{{ match.odds_draw }}">Draw – <span class="opt-odds-draw">{{ match.odds_draw }}</span></option>{% endif %}
-                        <option value="away" data-odds="{{ match.odds_away|default:'' }}">Away – <span class="opt-odds-away">{{ match.odds_away|default:"-" }}</span></option>
+                        <option value="home" data-odds="{{ display_odds_home|default:'' }}">Home – <span class="opt-odds-home">{{ display_odds_home|default:"-" }}</span></option>
+                        {% if display_odds_draw %}<option value="draw" data-odds="{{ display_odds_draw }}">Draw – <span class="opt-odds-draw">{{ display_odds_draw }}</span></option>{% endif %}
+                        <option value="away" data-odds="{{ display_odds_away|default:'' }}">Away – <span class="opt-odds-away">{{ display_odds_away|default:"-" }}</span></option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label>Stake</label>
                     <input type="number" name="stake" step="0.01" min="0.01" required value="1">
                 </div>
-                <input type="hidden" name="odds_shown" id="odds-shown-input" value="{{ match.odds_home|default:'' }}">
+                <input type="hidden" name="odds_shown" id="odds-shown-input" value="{{ display_odds_home|default:'' }}">
                 <button type="submit" class="btn">Place Bet</button>
             </form>
         {% endif %}

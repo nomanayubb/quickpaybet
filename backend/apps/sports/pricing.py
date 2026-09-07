@@ -144,3 +144,42 @@ def compute_lay_price(back_odds, spread: Decimal):
         Decimal('0.01'),
         rounding=ROUND_HALF_UP,
     )
+
+
+def resolve_user_extra_adjustment(user, match) -> Decimal:
+    """
+    Most-specific-wins resolution for the per-user odds-override cascade:
+    a UserMatchOddsOverride row for this exact (user, match) pair, else
+    this user's own odds_adjustment_override (every match), else zero (no
+    extra change - the user sees exactly the standard match-level price).
+    `user` may be None or anonymous, in which case there is nothing to
+    look up and this always returns zero.
+    """
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return Decimal('0')
+
+    from .models import UserMatchOddsOverride
+
+    specific = UserMatchOddsOverride.objects.filter(user=user, match=match).first()
+    if specific is not None:
+        return specific.adjustment
+    if user.odds_adjustment_override is not None:
+        return user.odds_adjustment_override
+    return Decimal('0')
+
+
+def get_effective_odds_for_user(match, user):
+    """
+    Returns (odds_home, odds_draw, odds_away) as this specific user should
+    see/be charged them. `Match.odds_home/draw/away` (the shared, public
+    price every other user sees) is never written to or derived from a
+    per-user value - this is computed fresh on every call from whatever
+    the match's current standard odds are, so turning off a user's
+    override always and automatically falls back to the untouched shared
+    price, nothing to clean up. Reuses apply_odds_adjustment() unchanged,
+    so the same unconditional 1.01 floor-clamp guarantee applies here too.
+    """
+    extra = resolve_user_extra_adjustment(user, match)
+    if not extra:
+        return match.odds_home, match.odds_draw, match.odds_away
+    return apply_odds_adjustment(extra, match.odds_home, match.odds_draw, match.odds_away)

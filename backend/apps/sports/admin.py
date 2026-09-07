@@ -1,8 +1,10 @@
+from decimal import Decimal
+
 from django.contrib import admin, messages
 
 from .models import (
     Sport, Tournament, Match, HouseLiquidityConfig, OddsAdjustmentConfig,
-    RealtimeOddsConfig, OddsHistoryEntry,
+    RealtimeOddsConfig, OddsHistoryEntry, UserMatchOddsOverride,
 )
 from apps.bets.services import settle_bets_for_match
 from apps.exchange.services import settle_exchange_for_match
@@ -24,11 +26,16 @@ class TournamentAdmin(admin.ModelAdmin):
 
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
-    list_display = ('home_team', 'away_team', 'sport', 'status', 'start_time')
+    list_display = ('home_team', 'away_team', 'sport', 'status', 'start_time', 'odds_adjustment_flag')
     list_filter = ('sport', 'status')
     search_fields = ('home_team', 'away_team')
     date_hierarchy = 'start_time'
     filter_horizontal = ()
+
+    @admin.display(description='Odds override')
+    def odds_adjustment_flag(self, obj):
+        return 'Active' if obj.odds_adjustment is not None else ''
+
     fieldsets = (
         (None, {
             'fields': ('sport', 'tournament', 'home_team', 'away_team', 'start_time', 'status')
@@ -54,7 +61,7 @@ class MatchAdmin(admin.ModelAdmin):
             ),
         }),
     )
-    actions = ['settle_selected_matches', 'cancel_selected_matches']
+    actions = ['settle_selected_matches', 'cancel_selected_matches', 'reset_odds_adjustment_to_default']
 
     @admin.action(description='Settle selected matches')
     def settle_selected_matches(self, request, queryset):
@@ -99,6 +106,11 @@ class MatchAdmin(admin.ModelAdmin):
 
         self.message_user(request, f'{cancelled} match(es) cancelled and bets refunded.')
 
+    @admin.action(description='Reset odds adjustment to default (site-wide) for selected matches')
+    def reset_odds_adjustment_to_default(self, request, queryset):
+        updated = queryset.exclude(odds_adjustment=None).update(odds_adjustment=None)
+        self.message_user(request, f'Cleared the odds adjustment override on {updated} match(es).')
+
 
 @admin.register(RealtimeOddsConfig)
 class RealtimeOddsConfigAdmin(admin.ModelAdmin):
@@ -119,7 +131,17 @@ class RealtimeOddsConfigAdmin(admin.ModelAdmin):
 
 @admin.register(OddsAdjustmentConfig)
 class OddsAdjustmentConfigAdmin(admin.ModelAdmin):
-    list_display = ('default_adjustment', 'updated_at')
+    list_display = ('default_adjustment', 'adjustment_flag', 'updated_at')
+    actions = ['reset_to_default']
+
+    @admin.display(description='Status')
+    def adjustment_flag(self, obj):
+        return 'Active' if obj.default_adjustment else 'Default (0)'
+
+    @admin.action(description='Reset to no adjustment (0)')
+    def reset_to_default(self, request, queryset):
+        updated = queryset.update(default_adjustment=Decimal('0'))
+        self.message_user(request, f'Reset {updated} config row(s) to 0.')
 
     def has_add_permission(self, request):
         # Singleton - only one row should ever exist.
@@ -139,6 +161,23 @@ class HouseLiquidityConfigAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(UserMatchOddsOverride)
+class UserMatchOddsOverrideAdmin(admin.ModelAdmin):
+    """
+    Every row here IS the alert - its mere existence means a specific
+    user has a specific-match odds override active. Deleting a row (via
+    Django admin's own bulk delete, no custom action needed) is exactly
+    the reset-to-default action: the resolution cascade
+    (apps.sports.pricing.resolve_user_extra_adjustment) automatically
+    falls back to that user's global override or the site default the
+    moment the row is gone.
+    """
+    list_display = ('user', 'match', 'adjustment', 'updated_at')
+    search_fields = ('user__email', 'match__home_team', 'match__away_team')
+    list_filter = ('match__sport',)
+    autocomplete_fields = ('user', 'match')
 
 
 @admin.register(OddsHistoryEntry)

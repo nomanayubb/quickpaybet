@@ -11,9 +11,29 @@ from .models import User, PasswordResetToken
 
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
-    list_display = ('email', 'role', 'parent', 'commission_rate', 'is_staff', 'is_active', 'is_house_account')
+    list_display = (
+        'email', 'role', 'parent', 'commission_rate', 'is_staff', 'is_active',
+        'is_house_account', 'odds_override_flag',
+    )
     list_filter = ('role', 'is_staff', 'is_active')
     ordering = ('email',)
+    # UserAdmin's own default search_fields references 'username', a field
+    # this custom User model doesn't have (set to None) - using Django
+    # admin's search box on this list, or autocompleting this model from
+    # another admin's autocomplete_fields, would otherwise crash with a
+    # FieldError the moment anyone actually typed a search query.
+    search_fields = ('email',)
+    actions = ['reset_odds_adjustment_override']
+
+    @admin.display(description='Odds override')
+    def odds_override_flag(self, obj):
+        return 'Active' if obj.odds_adjustment_override is not None else ''
+
+    @admin.action(description='Reset per-user odds override to default (blank)')
+    def reset_odds_adjustment_override(self, request, queryset):
+        updated = queryset.exclude(odds_adjustment_override=None).update(odds_adjustment_override=None)
+        self.message_user(request, f'Cleared the odds adjustment override on {updated} user(s).')
+
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal info', {'fields': ('first_name', 'last_name', 'phone_number')}),
@@ -25,6 +45,7 @@ class CustomUserAdmin(UserAdmin):
                 'min_bet_amount',
                 'max_bet_amount',
                 'is_betting_enabled',
+                'odds_adjustment_override',
             )
         }),
         ('Permissions', {

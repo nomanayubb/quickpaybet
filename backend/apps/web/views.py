@@ -1976,11 +1976,17 @@ def match_detail_view(request, pk):
 
     realtime_config = RealtimeOddsConfig.get_solo()
 
+    from apps.sports.pricing import get_effective_odds_for_user
+    display_odds_home, display_odds_draw, display_odds_away = get_effective_odds_for_user(match, request.user)
+
     return render(
         request,
         'web/match_detail.html',
         {
             'match': match,
+            'display_odds_home': display_odds_home,
+            'display_odds_draw': display_odds_draw,
+            'display_odds_away': display_odds_away,
             'error': place_error,
             'order_book': get_order_book(match) if match.status in (Match.Status.SCHEDULED, Match.Status.LIVE) else None,
             'my_exchange_orders': my_exchange_orders,
@@ -2024,10 +2030,13 @@ def match_odds_poll_view(request, pk):
             maybe_refresh_sport_odds(match.sport, interval)
             match.refresh_from_db(fields=['odds_home', 'odds_draw', 'odds_away'])
 
+    from apps.sports.pricing import get_effective_odds_for_user
+    odds_home, odds_draw, odds_away = get_effective_odds_for_user(match, request.user)
+
     return JsonResponse({
-        'odds_home': str(match.odds_home) if match.odds_home is not None else None,
-        'odds_draw': str(match.odds_draw) if match.odds_draw is not None else None,
-        'odds_away': str(match.odds_away) if match.odds_away is not None else None,
+        'odds_home': str(odds_home) if odds_home is not None else None,
+        'odds_draw': str(odds_draw) if odds_draw is not None else None,
+        'odds_away': str(odds_away) if odds_away is not None else None,
         'status': match.status,
         'should_continue_polling': interval is not None,
         'next_poll_seconds': interval or 60,

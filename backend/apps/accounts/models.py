@@ -83,6 +83,14 @@ class User(AbstractUser):
         default=False,
         verbose_name=_('House account (the exchange auto-seeds synthetic lay liquidity as this user)'),
     )
+    odds_adjustment_override = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name=_('Odds adjustment override for this user, all matches (blank = no extra change)'),
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []

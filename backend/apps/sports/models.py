@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
@@ -307,3 +308,50 @@ class OddsHistoryEntry(models.Model):
 
     def __str__(self):
         return f'{self.match} @ {self.recorded_at:%Y-%m-%d %H:%M:%S}'
+
+
+class UserMatchOddsOverride(models.Model):
+    """
+    The most specific level of the odds-adjustment cascade: one specific
+    user's adjustment on one specific match, taking precedence over both
+    User.odds_adjustment_override (that user, every match) and
+    Match.odds_adjustment (every user, that match). See
+    apps.sports.pricing.resolve_user_extra_adjustment() for the full
+    resolution order.
+
+    Applies only to the fixed-odds sportsbook (apps.bets) - there is no
+    equivalent concept on the exchange (apps.exchange), whose order book
+    is one shared, matched market by definition.
+
+    Every row in this table's admin changelist IS the "override is
+    active" alert by definition; deleting a row is the reset-to-default
+    action - no separate flag/action needed here unlike the other three
+    levels, which live as nullable fields an admin could otherwise forget
+    are set.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='match_odds_overrides',
+    )
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name='user_odds_overrides',
+    )
+    adjustment = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name='Odds adjustment for this user on this match',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'match')
+        verbose_name = 'User/Match Odds Override'
+        verbose_name_plural = 'User/Match Odds Overrides'
+
+    def __str__(self):
+        return f'{self.user} @ {self.match}: {self.adjustment:+}'

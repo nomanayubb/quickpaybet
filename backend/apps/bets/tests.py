@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 
 from apps.accounts.models import User
-from apps.sports.models import Sport, Match
+from apps.sports.models import Sport, Match, UserMatchOddsOverride
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
 from .models import Bet, ParlayBet
@@ -124,6 +124,55 @@ class BettingServiceTests(TestCase):
         ).first()
         self.assertIsNotNone(txn)
         self.assertEqual(txn.amount, Decimal('1'))
+
+
+class PerUserOddsOverrideBetPlacementTests(TestCase):
+    def setUp(self):
+        self.sport = Sport.objects.create(name='PerUserBetSport', slug='per-user-bet-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.targeted_user = User.objects.create_user(email='targeted@example.com', password='testpass123')
+        deposit_funds(self.targeted_user, Decimal('1000'))
+        self.other_user = User.objects.create_user(email='untargeted@example.com', password='testpass123')
+        deposit_funds(self.other_user, Decimal('1000'))
+
+    def test_targeted_users_bet_is_priced_and_recorded_at_the_overridden_rate(self):
+        UserMatchOddsOverride.objects.create(
+            user=self.targeted_user, match=self.match, adjustment=Decimal('-0.50'),
+        )
+        bet = place_bet(
+            user=self.targeted_user, match_id=self.match.id, selection=Bet.Selection.HOME, stake=Decimal('10'),
+        )
+        self.assertEqual(bet.odds, Decimal('1.50'))
+        self.assertEqual(bet.potential_payout, Decimal('15.00'))
+
+    def test_untargeted_users_bet_on_the_same_match_uses_the_standard_rate(self):
+        UserMatchOddsOverride.objects.create(
+            user=self.targeted_user, match=self.match, adjustment=Decimal('-0.50'),
+        )
+        bet = place_bet(
+            user=self.other_user, match_id=self.match.id, selection=Bet.Selection.HOME, stake=Decimal('10'),
+        )
+        self.assertEqual(bet.odds, Decimal('2.00'))
+
+    def test_user_global_override_applies_across_matches_at_bet_placement(self):
+        self.targeted_user.odds_adjustment_override = Decimal('1.00')
+        self.targeted_user.save(update_fields=['odds_adjustment_override'])
+        bet = place_bet(
+            user=self.targeted_user, match_id=self.match.id, selection=Bet.Selection.AWAY, stake=Decimal('5'),
+        )
+        self.assertEqual(bet.odds, Decimal('5.00'))  # 4.00 + 1.00
+
+    def test_matches_own_odds_field_is_never_mutated_by_a_per_user_override(self):
+        UserMatchOddsOverride.objects.create(
+            user=self.targeted_user, match=self.match, adjustment=Decimal('2.00'),
+        )
+        place_bet(user=self.targeted_user, match_id=self.match.id, selection=Bet.Selection.HOME, stake=Decimal('10'))
+        self.match.refresh_from_db()
+        self.assertEqual(self.match.odds_home, Decimal('2.00'))  # unchanged
 
 
 class ParlayAPITests(APITestCase):

@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -11,12 +12,16 @@ from apps.bets.services import place_bet
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
-from .models import Match, OddsAdjustmentConfig, OddsHistoryEntry, RealtimeOddsConfig, Sport
+from .models import (
+    Match, OddsAdjustmentConfig, OddsHistoryEntry, RealtimeOddsConfig, Sport, UserMatchOddsOverride,
+)
 from .pricing import (
     apply_odds_adjustment,
     compute_lay_price,
+    get_effective_odds_for_user,
     resolve_effective_adjustment,
     resolve_effective_lay_spread,
+    resolve_user_extra_adjustment,
 )
 from .providers import (
     BaseOddsProvider,
@@ -535,3 +540,129 @@ class LaySpreadPricingTests(TestCase):
         self.assertEqual(
             resolve_effective_lay_spread(None, Decimal('0.10')), Decimal('0.10'),
         )
+
+
+class PerUserOddsOverrideTests(TestCase):
+    def setUp(self):
+        self.sport = Sport.objects.create(name='PerUserOddsSport', slug='per-user-odds-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.other_match = Match.objects.create(
+            sport=self.sport, home_team='H2', away_team='A2',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('5.00'), odds_draw=Decimal('6.00'), odds_away=Decimal('7.00'),
+        )
+        self.user = User.objects.create_user(email='oddsoverride@example.com', password='testpass123')
+
+    def test_no_override_anywhere_returns_zero(self):
+        self.assertEqual(resolve_user_extra_adjustment(self.user, self.match), Decimal('0'))
+
+    def test_none_user_returns_zero(self):
+        self.assertEqual(resolve_user_extra_adjustment(None, self.match), Decimal('0'))
+
+    def test_user_global_override_applies_to_any_match(self):
+        self.user.odds_adjustment_override = Decimal('-0.50')
+        self.user.save(update_fields=['odds_adjustment_override'])
+        self.assertEqual(resolve_user_extra_adjustment(self.user, self.match), Decimal('-0.50'))
+        self.assertEqual(resolve_user_extra_adjustment(self.user, self.other_match), Decimal('-0.50'))
+
+    def test_user_match_specific_override_beats_user_global_override(self):
+        self.user.odds_adjustment_override = Decimal('-0.50')
+        self.user.save(update_fields=['odds_adjustment_override'])
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, adjustment=Decimal('2.00'))
+
+        self.assertEqual(resolve_user_extra_adjustment(self.user, self.match), Decimal('2.00'))
+        # The other match isn't covered by the specific override - falls
+        # back to this user's global override.
+        self.assertEqual(resolve_user_extra_adjustment(self.user, self.other_match), Decimal('-0.50'))
+
+    def test_get_effective_odds_for_user_with_no_override_returns_match_odds_unchanged(self):
+        odds = get_effective_odds_for_user(self.match, self.user)
+        self.assertEqual(odds, (Decimal('2.00'), Decimal('3.00'), Decimal('4.00')))
+
+    def test_get_effective_odds_for_user_applies_override(self):
+        self.user.odds_adjustment_override = Decimal('0.20')
+        self.user.save(update_fields=['odds_adjustment_override'])
+        odds = get_effective_odds_for_user(self.match, self.user)
+        self.assertEqual(odds, (Decimal('2.20'), Decimal('3.20'), Decimal('4.20')))
+
+    def test_get_effective_odds_for_user_still_floor_clamped(self):
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, adjustment=Decimal('-10.00'))
+        odds_home, odds_draw, odds_away = get_effective_odds_for_user(self.match, self.user)
+        # 2.00 - 10.00 would be negative without the floor - proves the
+        # same ODDS_FLOOR guarantee from apply_odds_adjustment still holds
+        # for the per-user layer, since it reuses that function unchanged.
+        self.assertEqual(odds_home, Decimal('1.01'))
+
+    def test_get_effective_odds_for_user_never_touches_the_shared_match_row(self):
+        UserMatchOddsOverride.objects.create(user=self.user, match=self.match, adjustment=Decimal('1.00'))
+        get_effective_odds_for_user(self.match, self.user)
+        self.match.refresh_from_db()
+        # The shared, public price every other user sees must be completely
+        # untouched by a per-user override.
+        self.assertEqual(self.match.odds_home, Decimal('2.00'))
+
+    def test_get_effective_odds_for_anonymous_user_returns_match_odds_unchanged(self):
+        anonymous = AnonymousUser()
+        odds = get_effective_odds_for_user(self.match, anonymous)
+        self.assertEqual(odds, (Decimal('2.00'), Decimal('3.00'), Decimal('4.00')))
+
+
+class OddsAdjustmentAdminResetActionTests(TestCase):
+    def _admin_request(self):
+        # message_user() (called by every reset action) needs a request
+        # with a real messages backend attached - RequestFactory alone
+        # doesn't wire one up, so it's attached by hand here, the standard
+        # way to unit-test a Django admin action outside of a real view.
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        from django.test import RequestFactory
+
+        request = RequestFactory().get('/admin/')
+        request.session = {}
+        request._messages = FallbackStorage(request)
+        return request
+
+    def setUp(self):
+        self.sport = Sport.objects.create(name='ResetActionSport', slug='reset-action-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+            odds_adjustment=Decimal('0.50'),
+        )
+        self.user = User.objects.create_user(
+            email='resetaction@example.com', password='testpass123',
+            odds_adjustment_override=Decimal('1.00'),
+        )
+        OddsAdjustmentConfig.objects.filter(pk=1).delete()
+        self.config = OddsAdjustmentConfig.objects.create(pk=1, default_adjustment=Decimal('0.30'))
+
+    def test_match_reset_action_clears_override(self):
+        from django.contrib import admin as django_admin
+        from .admin import MatchAdmin
+
+        admin_instance = MatchAdmin(Match, django_admin.site)
+        admin_instance.reset_odds_adjustment_to_default(self._admin_request(), Match.objects.filter(pk=self.match.pk))
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.odds_adjustment)
+
+    def test_user_reset_action_clears_override(self):
+        from django.contrib import admin as django_admin
+        from apps.accounts.admin import CustomUserAdmin
+
+        admin_instance = CustomUserAdmin(User, django_admin.site)
+        admin_instance.reset_odds_adjustment_override(self._admin_request(), User.objects.filter(pk=self.user.pk))
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.odds_adjustment_override)
+
+    def test_global_config_reset_action_clears_to_zero(self):
+        from django.contrib import admin as django_admin
+        from .admin import OddsAdjustmentConfigAdmin
+
+        admin_instance = OddsAdjustmentConfigAdmin(OddsAdjustmentConfig, django_admin.site)
+        admin_instance.reset_to_default(self._admin_request(), OddsAdjustmentConfig.objects.filter(pk=self.config.pk))
+        self.config.refresh_from_db()
+        self.assertEqual(self.config.default_adjustment, Decimal('0'))
