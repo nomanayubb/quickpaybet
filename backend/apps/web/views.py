@@ -314,6 +314,7 @@ def admin_edit_match_view(request, match_id):
             odds_home_raw = request.POST.get('odds_home', '').strip()
             odds_draw_raw = request.POST.get('odds_draw', '').strip()
             odds_away_raw = request.POST.get('odds_away', '').strip()
+            odds_adjustment_raw = request.POST.get('odds_adjustment', '').strip()
 
             if not home_team or not away_team:
                 raise ValidationError('Team names are required.')
@@ -335,6 +336,17 @@ def admin_edit_match_view(request, match_id):
                     raise ValidationError('Odds must be greater than 1.00.')
                 return d
 
+            def parse_adjustment(value):
+                if value == '' or value is None:
+                    return None
+                try:
+                    d = Decimal(value)
+                except InvalidOperation:
+                    raise ValidationError('Odds adjustment must be a valid decimal number.')
+                if d < Decimal('-10.00') or d > Decimal('10.00'):
+                    raise ValidationError('Odds adjustment must be between -10.00 and 10.00.')
+                return d
+
             match.home_team = home_team
             match.away_team = away_team
             match.status = status
@@ -342,6 +354,7 @@ def admin_edit_match_view(request, match_id):
             match.odds_home = parse_decimal(odds_home_raw)
             match.odds_draw = parse_decimal(odds_draw_raw)
             match.odds_away = parse_decimal(odds_away_raw)
+            match.odds_adjustment = parse_adjustment(odds_adjustment_raw)
 
             match.save()
             return redirect('web:admin_matches')

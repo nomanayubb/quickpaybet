@@ -5,8 +5,8 @@ from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .models import Match, OddsHistoryEntry, RealtimeOddsConfig, Sport
-from .pricing import normalize_odds
+from .models import Match, OddsAdjustmentConfig, OddsHistoryEntry, RealtimeOddsConfig, Sport
+from .pricing import apply_odds_adjustment, normalize_odds, resolve_effective_adjustment
 from .providers import get_odds_provider
 
 DEFAULT_MARGIN = Decimal('0.05')
@@ -94,6 +94,7 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
     # a fetch is actually happening - keeping this out of the hot path
     # when there's nothing to refresh.
     keep_history = RealtimeOddsConfig.get_solo().store_full_odds_history
+    default_adjustment = OddsAdjustmentConfig.get_solo().default_adjustment
     history_entries = []
 
     for item in items:
@@ -117,15 +118,21 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
         if not matches:
             continue
 
-        Match.objects.filter(pk__in=[m.pk for m in matches]).update(
-            odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
-        )
-
-        if keep_history:
-            history_entries.extend(
-                OddsHistoryEntry(match=m, odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away)
-                for m in matches
+        # Applied per-match (not bulk) since each match may carry its own
+        # odds_adjustment override, which can differ across matches that
+        # otherwise share this same provider quote.
+        for m in matches:
+            effective_adjustment = resolve_effective_adjustment(m.odds_adjustment, default_adjustment)
+            adj_home, adj_draw, adj_away = apply_odds_adjustment(
+                effective_adjustment, odds_home, odds_draw, odds_away,
             )
+            Match.objects.filter(pk=m.pk).update(
+                odds_home=adj_home, odds_draw=adj_draw, odds_away=adj_away,
+            )
+            if keep_history:
+                history_entries.append(
+                    OddsHistoryEntry(match=m, odds_home=adj_home, odds_draw=adj_draw, odds_away=adj_away)
+                )
 
     if history_entries:
         OddsHistoryEntry.objects.bulk_create(history_entries)

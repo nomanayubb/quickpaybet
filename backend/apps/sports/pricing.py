@@ -82,3 +82,36 @@ def normalize_odds(
         normalized[1],
         normalized[2],
     )
+
+
+ODDS_FLOOR = Decimal('1.01')
+
+
+def resolve_effective_adjustment(match_adjustment, default_adjustment) -> Decimal:
+    """Returns a match's own odds_adjustment override if set, else the global default."""
+    return match_adjustment if match_adjustment is not None else default_adjustment
+
+
+def apply_odds_adjustment(
+    adjustment: Decimal,
+    odds_home,
+    odds_draw,
+    odds_away,
+) -> Tuple[Decimal, Optional[Decimal], Decimal]:
+    """Adds a flat `adjustment` to each odds value, floor-clamped so the result
+    can never reach or drop below 1.00 (the only value this codebase treats
+    as valid odds anywhere else). `None` (two-outcome markets have no draw
+    odds) always passes through unchanged. A zero adjustment is a no-op.
+    """
+    if not adjustment:
+        return odds_home, odds_draw, odds_away
+
+    def _adjust(value):
+        if value is None:
+            return None
+        return max(_to_decimal(value) + adjustment, ODDS_FLOOR).quantize(
+            Decimal('0.01'),
+            rounding=ROUND_HALF_UP,
+        )
+
+    return _adjust(odds_home), _adjust(odds_draw), _adjust(odds_away)

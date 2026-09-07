@@ -11,7 +11,8 @@ from apps.bets.services import place_bet
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
-from .models import Match, OddsHistoryEntry, RealtimeOddsConfig, Sport
+from .models import Match, OddsAdjustmentConfig, OddsHistoryEntry, RealtimeOddsConfig, Sport
+from .pricing import apply_odds_adjustment, resolve_effective_adjustment
 from .providers import (
     BaseOddsProvider,
     MockOddsProvider,
@@ -378,3 +379,119 @@ class PlaceBetOddsRevalidationTests(TestCase):
         # 2.00 actual vs 3.00 shown - a 50% move, well beyond tolerance.
         with self.assertRaises(ValidationError):
             place_bet(self.user, self.match.id, 'home', Decimal('10'), odds_shown=Decimal('3.00'))
+
+
+class OddsAdjustmentPricingTests(TestCase):
+    def test_zero_adjustment_is_a_no_op(self):
+        result = apply_odds_adjustment(Decimal('0'), Decimal('2.00'), Decimal('3.00'), Decimal('4.00'))
+        self.assertEqual(result, (Decimal('2.00'), Decimal('3.00'), Decimal('4.00')))
+
+    def test_positive_adjustment_added_to_each_value(self):
+        result = apply_odds_adjustment(Decimal('0.50'), Decimal('2.00'), Decimal('3.00'), Decimal('4.00'))
+        self.assertEqual(result, (Decimal('2.50'), Decimal('3.50'), Decimal('4.50')))
+
+    def test_negative_adjustment_subtracted_from_each_value(self):
+        result = apply_odds_adjustment(Decimal('-0.50'), Decimal('2.00'), Decimal('3.00'), Decimal('4.00'))
+        self.assertEqual(result, (Decimal('1.50'), Decimal('2.50'), Decimal('3.50')))
+
+    def test_negative_adjustment_clamped_to_floor(self):
+        # -10.00 against a short-priced favorite (1.20) would otherwise go
+        # negative - this is the exact "database never gets corrupted"
+        # guarantee the client asked for.
+        home, draw, away = apply_odds_adjustment(Decimal('-10.00'), Decimal('1.20'), Decimal('3.00'), Decimal('4.00'))
+        self.assertEqual(home, Decimal('1.01'))
+        self.assertEqual(draw, Decimal('1.01'))
+        self.assertEqual(away, Decimal('1.01'))
+
+    def test_none_draw_passes_through_unchanged(self):
+        # Two-outcome markets (no draw) must never crash on this.
+        home, draw, away = apply_odds_adjustment(Decimal('1.00'), Decimal('2.00'), None, Decimal('4.00'))
+        self.assertIsNone(draw)
+        self.assertEqual(home, Decimal('3.00'))
+        self.assertEqual(away, Decimal('5.00'))
+
+    def test_resolve_effective_adjustment_prefers_match_override(self):
+        self.assertEqual(
+            resolve_effective_adjustment(Decimal('2.00'), Decimal('0.00')), Decimal('2.00'),
+        )
+
+    def test_resolve_effective_adjustment_falls_back_to_default(self):
+        self.assertEqual(
+            resolve_effective_adjustment(None, Decimal('1.50')), Decimal('1.50'),
+        )
+
+
+class OddsAdjustmentRealtimeTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.sport = Sport.objects.create(name='AdjSport', slug='adj-sport', provider_key='adj_sport')
+
+    def _mock_provider(self):
+        provider = MagicMock()
+        provider.fetch_matches.return_value = [{
+            'home_team': 'Home Team', 'away_team': 'Away Team',
+            'start_time': self.start_time.isoformat(),
+            'odds_home': '2.00', 'odds_draw': '3.00', 'odds_away': '4.00',
+        }]
+        return provider
+
+    def test_global_default_applied_when_match_has_no_override(self):
+        from .pricing import normalize_odds
+
+        OddsAdjustmentConfig.objects.create(pk=1, default_adjustment=Decimal('0.20'))
+        self.start_time = timezone.now() + timezone.timedelta(hours=1)
+        match = Match.objects.create(
+            sport=self.sport, home_team='Home Team', away_team='Away Team',
+            start_time=self.start_time, status=Match.Status.SCHEDULED,
+        )
+
+        with patch('apps.sports.realtime.get_odds_provider', return_value=self._mock_provider()):
+            maybe_refresh_sport_odds(self.sport, 20)
+
+        match.refresh_from_db()
+        base_home, _, _ = normalize_odds('2.00', '3.00', '4.00', margin=Decimal('0.05'))
+        self.assertEqual(match.odds_home, base_home + Decimal('0.20'))
+
+    def test_per_match_override_takes_precedence_over_default(self):
+        from .pricing import normalize_odds
+
+        OddsAdjustmentConfig.objects.create(pk=1, default_adjustment=Decimal('0.20'))
+        self.start_time = timezone.now() + timezone.timedelta(hours=1)
+        match = Match.objects.create(
+            sport=self.sport, home_team='Home Team', away_team='Away Team',
+            start_time=self.start_time, status=Match.Status.SCHEDULED,
+            odds_adjustment=Decimal('-1.00'),
+        )
+
+        with patch('apps.sports.realtime.get_odds_provider', return_value=self._mock_provider()):
+            maybe_refresh_sport_odds(self.sport, 20)
+
+        match.refresh_from_db()
+        base_home, _, _ = normalize_odds('2.00', '3.00', '4.00', margin=Decimal('0.05'))
+        self.assertEqual(match.odds_home, base_home - Decimal('1.00'))
+
+    def test_existing_bet_unaffected_by_later_adjustment_change(self):
+        user = User.objects.create_user(email='adjbet@example.com', password='testpass123')
+        Wallet.objects.get_or_create(user=user)
+        deposit_funds(user, Decimal('1000'))
+
+        self.start_time = timezone.now() + timezone.timedelta(hours=1)
+        match = Match.objects.create(
+            sport=self.sport, home_team='Home Team', away_team='Away Team',
+            start_time=self.start_time, status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+
+        bet = place_bet(user, match.id, 'home', Decimal('10'))
+        self.assertEqual(bet.odds, Decimal('2.00'))
+
+        # Admin changes this match's adjustment after the bet was placed.
+        match.odds_adjustment = Decimal('5.00')
+        match.save(update_fields=['odds_adjustment'])
+        with patch('apps.sports.realtime.get_odds_provider', return_value=self._mock_provider()):
+            maybe_refresh_sport_odds(self.sport, 20)
+
+        match.refresh_from_db()
+        self.assertNotEqual(match.odds_home, Decimal('2.00'))  # the match's odds did move...
+        bet.refresh_from_db()
+        self.assertEqual(bet.odds, Decimal('2.00'))  # ...but the already-placed bet's odds did not.

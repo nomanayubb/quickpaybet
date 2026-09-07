@@ -3,8 +3,8 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.utils.dateparse import parse_datetime
 
-from apps.sports.models import Sport, Tournament, Match
-from apps.sports.pricing import normalize_odds
+from apps.sports.models import OddsAdjustmentConfig, Sport, Tournament, Match
+from apps.sports.pricing import apply_odds_adjustment, normalize_odds, resolve_effective_adjustment
 from apps.sports.providers import get_odds_provider
 
 
@@ -32,6 +32,7 @@ class Command(BaseCommand):
         created_counter,
         updated_counter,
         margin: Decimal,
+        default_adjustment: Decimal,
     ):
         tournament_name = item.get('tournament_name', '').strip()
         if not tournament_name:
@@ -59,6 +60,23 @@ class Command(BaseCommand):
             self.stderr.write(f"Skipping {item['home_team']} v {item['away_team']}: {exc}")
             return created_counter, updated_counter
 
+        # Look up any existing match first so a per-match odds_adjustment
+        # override (set by an admin) survives this sync instead of being
+        # silently ignored - update_or_create's `defaults` never touch a
+        # field that isn't listed in it, but we still need the existing
+        # value here to compute the effective adjustment to apply.
+        existing = Match.objects.filter(
+            sport=sport,
+            home_team=item['home_team'],
+            away_team=item['away_team'],
+            start_time=start_time,
+        ).first()
+        match_adjustment = existing.odds_adjustment if existing else None
+        effective_adjustment = resolve_effective_adjustment(match_adjustment, default_adjustment)
+        odds_home, odds_draw, odds_away = apply_odds_adjustment(
+            effective_adjustment, odds_home, odds_draw, odds_away,
+        )
+
         defaults = {
             'tournament': tournament,
             'odds_home': odds_home,
@@ -83,6 +101,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         margin = Decimal(str(options.get('margin', 0.05)))
         only_provider_key = options.get('sport_provider_key')
+        default_adjustment = OddsAdjustmentConfig.get_solo().default_adjustment
         provider = get_odds_provider()
         self.stdout.write(f'Fetching matches from provider: {provider.name}')
 
@@ -105,6 +124,7 @@ class Command(BaseCommand):
                     created,
                     updated,
                     margin,
+                    default_adjustment,
                 )
         else:
             sports_qs = Sport.objects.filter(is_active=True).order_by('name')

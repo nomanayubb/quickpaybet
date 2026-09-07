@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
@@ -88,6 +90,14 @@ class Match(models.Model):
         null=True,
         blank=True
     )
+    odds_adjustment = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name='Odds adjustment override (added to every odds value; blank = use the global default)',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -162,6 +172,43 @@ class RealtimeOddsConfig(models.Model):
 
     @classmethod
     def get_solo(cls) -> 'RealtimeOddsConfig':
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class OddsAdjustmentConfig(models.Model):
+    """
+    Singleton settings row (same get_solo()/pk=1 pattern as
+    RealtimeOddsConfig above) holding the site-wide default odds
+    adjustment - a flat amount added to every match's odds wherever they
+    get written (see apps.sports.pricing.apply_odds_adjustment). A single
+    Match can override this default via its own odds_adjustment field;
+    None there means "use this global default".
+
+    Bounded to -10.00..10.00 (the exact range requested) so an admin can
+    never enter a value that, by itself, is out of range - the actual
+    floor against the database going nonsensical (odds dropping to/below
+    1.00) is enforced separately in apply_odds_adjustment, since even an
+    in-range adjustment can push a short-priced favorite's odds too low.
+    """
+    default_adjustment = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name='Default odds adjustment (added to every match\'s odds unless a match overrides it)',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Odds Adjustment Config'
+        verbose_name_plural = 'Odds Adjustment Config'
+
+    def __str__(self):
+        return f'Odds adjustment: default={self.default_adjustment:+}'
+
+    @classmethod
+    def get_solo(cls) -> 'OddsAdjustmentConfig':
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 

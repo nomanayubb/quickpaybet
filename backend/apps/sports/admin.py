@@ -1,6 +1,6 @@
 from django.contrib import admin, messages
 
-from .models import Sport, Tournament, Match, RealtimeOddsConfig, OddsHistoryEntry
+from .models import Sport, Tournament, Match, OddsAdjustmentConfig, RealtimeOddsConfig, OddsHistoryEntry
 from apps.bets.services import settle_bets_for_match
 from apps.exchange.services import settle_exchange_for_match
 
@@ -35,6 +35,13 @@ class MatchAdmin(admin.ModelAdmin):
         }),
         ('Odds', {
             'fields': ('odds_home', 'odds_draw', 'odds_away')
+        }),
+        ('Odds adjustment', {
+            'fields': ('odds_adjustment',),
+            'description': (
+                'Optional per-match override added to this match\'s odds on every refresh. '
+                'Leave blank to use the site-wide default (Odds Adjustment Config, below).'
+            ),
         }),
     )
     actions = ['settle_selected_matches', 'cancel_selected_matches']
@@ -95,6 +102,18 @@ class RealtimeOddsConfigAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         # Singleton - only one row should ever exist.
         return not RealtimeOddsConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(OddsAdjustmentConfig)
+class OddsAdjustmentConfigAdmin(admin.ModelAdmin):
+    list_display = ('default_adjustment', 'updated_at')
+
+    def has_add_permission(self, request):
+        # Singleton - only one row should ever exist.
+        return not OddsAdjustmentConfig.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
         return False
