@@ -32,3 +32,24 @@ class WalletServiceTests(TestCase):
     def test_withdraw_insufficient_balance(self):
         with self.assertRaises(ValidationError):
             withdraw_funds(self.user, Decimal('10'))
+
+    def test_withdraw_cannot_touch_reserved_balance(self):
+        """
+        reserved_balance locks exposure for open exchange orders (see
+        apps.exchange.services) - withdrawing must only ever draw from
+        available_balance (balance - reserved_balance), never the raw
+        balance, or money backing an unsettled bet could leave the wallet.
+        """
+        deposit_funds(self.user, Decimal('100'))
+        self.wallet.reserved_balance = Decimal('40')
+        self.wallet.save(update_fields=['reserved_balance'])
+
+        with self.assertRaises(ValidationError):
+            withdraw_funds(self.user, Decimal('61'))  # only 60 is available
+
+        txn = withdraw_funds(self.user, Decimal('60'))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('40'))
+        self.assertEqual(self.wallet.reserved_balance, Decimal('40'))
+        self.assertEqual(self.wallet.available_balance, Decimal('0'))
+        self.assertEqual(txn.amount, Decimal('-60'))
