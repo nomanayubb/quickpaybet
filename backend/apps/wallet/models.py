@@ -10,6 +10,7 @@ class Wallet(models.Model):
     )
     balance = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     reserved_balance = models.DecimalField(max_digits=20, decimal_places=8, default=0)
+    locked_cashback_balance = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -24,6 +25,18 @@ class Wallet(models.Model):
     def available_balance(self):
         return self.balance - self.reserved_balance
 
+    @property
+    def withdrawable_balance(self):
+        """
+        What can actually leave the platform right now: available_balance
+        (already excluding exchange exposure) further reduced by any
+        cashback still locked behind a wagering requirement. Locked
+        cashback money stays fully usable for placing bets/orders - only
+        available_balance (not this) gates that - it just can't be
+        withdrawn until apps.cashback.services.record_wager() unlocks it.
+        """
+        return self.available_balance - self.locked_cashback_balance
+
 
 class WalletTransaction(models.Model):
     class TxnType(models.TextChoices):
@@ -36,6 +49,8 @@ class WalletTransaction(models.Model):
         ADJUSTMENT = 'adjustment', 'Adjustment'
         EXCHANGE_WON = 'exchange_won', 'Exchange Won'
         EXCHANGE_LOST = 'exchange_lost', 'Exchange Lost'
+        CASHBACK_CREDIT = 'cashback_credit', 'Cashback Credit'
+        CASHBACK_CLAWBACK = 'cashback_clawback', 'Cashback Clawback'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'

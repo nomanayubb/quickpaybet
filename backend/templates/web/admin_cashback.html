@@ -1,0 +1,84 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Cashback Dashboard</h1>
+    <p style="color:#555;">
+        Global on/off, default rate, default wagering multiplier, and the deduct-on-unlock
+        toggle are set in <a href="/admin/cashback/cashbackconfig/1/change/">Django admin</a>.
+        Per-user overrides are set on each user's <a href="{% url 'web:admin_users' %}">edit page</a>.
+        This page is read-only.
+    </p>
+
+    <div>
+        <div class="stat-card">
+            <span>Credited (all-time)</span>
+            <strong>{{ stats.credited_all_time|floatformat:2 }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Credited (last 7 days)</span>
+            <strong>{{ stats.credited_7d|floatformat:2 }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Currently Locked (total)</span>
+            <strong>{{ stats.locked_total|floatformat:2 }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Locked Credits</span>
+            <strong>{{ stats.locked_count }}</strong>
+        </div>
+        <div class="stat-card">
+            <span>Unlocked Credits</span>
+            <strong>{{ stats.unlocked_count }}</strong>
+        </div>
+    </div>
+
+    <h2 style="margin-top:32px;">Cashback Credits</h2>
+    <form method="get" style="margin-bottom: 12px;">
+        <input type="text" name="credits_q" value="{{ credits_q }}" placeholder="Search by user email">
+        <select name="credits_status">
+            <option value="">Any status</option>
+            {% for value, label in credit_status_choices %}
+                <option value="{{ value }}" {% if credits_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        From <input type="date" name="credits_date_from" value="{{ credits_date_from }}">
+        To <input type="date" name="credits_date_to" value="{{ credits_date_to }}">
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_cashback' %}">Reset</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>User</th><th>Source</th><th>Loss</th><th>Rate</th><th>Cashback</th><th>Multiplier</th><th>Wagered</th><th>Required</th><th>Status</th><th>Date</th></tr>
+        </thead>
+        <tbody>
+            {% for credit in credits_page %}
+                <tr>
+                    <td>{{ credit.user.email }}</td>
+                    <td>{{ credit.source_description }}</td>
+                    <td>{{ credit.loss_amount }}</td>
+                    <td>{{ credit.rate_applied }}%</td>
+                    <td>{{ credit.cashback_amount }}</td>
+                    <td>{{ credit.multiplier_applied }}x</td>
+                    <td>{{ credit.wagering_progress }}</td>
+                    <td>{{ credit.wagering_required }}</td>
+                    <td>{{ credit.status }}</td>
+                    <td>{{ credit.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="10">No cashback credits match this search.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if credits_page.has_previous or credits_page.has_next %}
+        <div style="margin-top: 12px;">
+            {% if credits_page.has_previous %}
+                <a class="btn" href="?credits_page={{ credits_page.previous_page_number }}&credits_q={{ credits_q }}&credits_status={{ credits_status }}&credits_date_from={{ credits_date_from }}&credits_date_to={{ credits_date_to }}">Previous</a>
+            {% endif %}
+            <span>Page {{ credits_page.number }} of {{ credits_page.paginator.num_pages }} ({{ credits_page.paginator.count }} total)</span>
+            {% if credits_page.has_next %}
+                <a class="btn" href="?credits_page={{ credits_page.next_page_number }}&credits_q={{ credits_q }}&credits_status={{ credits_status }}&credits_date_from={{ credits_date_from }}&credits_date_to={{ credits_date_to }}">Next</a>
+            {% endif %}
+        </div>
+    {% endif %}
+{% endblock %}

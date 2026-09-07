@@ -12,6 +12,18 @@
             <strong>{{ wallet.reserved_balance|floatformat:2 }}</strong>
         </div>
     {% endif %}
+    {% if wallet.locked_cashback_balance %}
+        <div class="stat-card">
+            <span>Cashback (locked until wagered through)</span>
+            <strong>{{ wallet.locked_cashback_balance|floatformat:2 }}</strong>
+        </div>
+    {% endif %}
+    {% if wallet.reserved_balance or wallet.locked_cashback_balance %}
+        <div class="stat-card">
+            <span>Withdrawable now</span>
+            <strong>{{ wallet.withdrawable_balance|floatformat:2 }}</strong>
+        </div>
+    {% endif %}
 
     {% if pending_deposits %}
         <h3>Pending Deposits</h3>
@@ -65,4 +77,30 @@
             {% endfor %}
         </tbody>
     </table>
+
+    {% if cashback_credits %}
+        <h3 style="margin-top:24px;">Cashback Credits</h3>
+        <table>
+            <thead>
+                <tr><th>Source</th><th>Amount</th><th>Status</th><th>Progress</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+                {% for credit in cashback_credits %}
+                    <tr>
+                        <td>{{ credit.source_description }}</td>
+                        <td>{{ credit.cashback_amount|floatformat:2 }}</td>
+                        <td>{{ credit.status }}</td>
+                        <td>
+                            {% if credit.status == 'locked' %}
+                                {{ credit.wagering_progress|floatformat:2 }} / {{ credit.wagering_required|floatformat:2 }} wagered
+                            {% else %}
+                                &mdash;
+                            {% endif %}
+                        </td>
+                        <td>{{ credit.created_at|date:"Y-m-d H:i" }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
 {% endblock %}

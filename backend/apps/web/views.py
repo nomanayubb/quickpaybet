@@ -28,6 +28,7 @@ from apps.bets.models import Bet, ParlayBet
 from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_bets_for_match
 from apps.exchange.services import place_order as place_exchange_order, cancel_order as cancel_exchange_order, settle_exchange_for_match, cash_out_order, preview_cash_out
 from apps.exchange.models import ExchangeOrder, ExchangeFill
+from apps.cashback.models import CashbackCredit
 from apps.sports.models import Match, Sport, Tournament
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
@@ -531,6 +532,66 @@ def admin_exchange_dashboard_view(request):
             'fill_status_choices': ExchangeFill.Status.choices,
             'selection_choices': Bet.Selection.choices,
             'active': 'admin_exchange',
+        },
+    )
+
+
+def admin_cashback_dashboard_view(request):
+    """
+    Read-only overview of loss-cashback activity: summary stats and a
+    searchable/filterable/paginated CashbackCredit table. Direct structural
+    copy of admin_exchange_dashboard_view - same GET-param-prefix
+    convention, same _parse_pkt_date_bound helper. Editing the global
+    cashback rate/multiplier/on-off switch happens in Django's built-in
+    /admin/ (see apps/cashback/admin.py); per-user overrides are edited on
+    the existing admin_user_update_view page. Adds no new wallet mutations.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    from django.db.models import Sum
+
+    since_7d = timezone.now() - timedelta(days=7)
+    stats = {
+        'credited_all_time': CashbackCredit.objects.aggregate(s=Sum('cashback_amount'))['s'] or Decimal('0'),
+        'credited_7d': CashbackCredit.objects.filter(created_at__gte=since_7d).aggregate(s=Sum('cashback_amount'))['s'] or Decimal('0'),
+        'locked_total': CashbackCredit.objects.filter(status=CashbackCredit.Status.LOCKED).aggregate(s=Sum('cashback_amount'))['s'] or Decimal('0'),
+        'locked_count': CashbackCredit.objects.filter(status=CashbackCredit.Status.LOCKED).count(),
+        'unlocked_count': CashbackCredit.objects.filter(status=CashbackCredit.Status.UNLOCKED).count(),
+    }
+
+    credits_q = request.GET.get('credits_q', '').strip()
+    credits_status = request.GET.get('credits_status', '').strip()
+    credits_date_from = request.GET.get('credits_date_from', '').strip()
+    credits_date_to = request.GET.get('credits_date_to', '').strip()
+
+    credits_qs = CashbackCredit.objects.select_related('user').order_by('-created_at')
+    if credits_q:
+        credits_qs = credits_qs.filter(user__email__icontains=credits_q)
+    if credits_status:
+        credits_qs = credits_qs.filter(status=credits_status)
+    credits_from_dt = _parse_pkt_date_bound(credits_date_from)
+    credits_to_dt = _parse_pkt_date_bound(credits_date_to, end_of_day=True)
+    if credits_from_dt:
+        credits_qs = credits_qs.filter(created_at__gte=credits_from_dt)
+    if credits_to_dt:
+        credits_qs = credits_qs.filter(created_at__lte=credits_to_dt)
+
+    credits_paginator = Paginator(credits_qs, 20)
+    credits_page = credits_paginator.get_page(request.GET.get('credits_page'))
+
+    return render(
+        request,
+        'web/admin_cashback.html',
+        {
+            'stats': stats,
+            'credits_page': credits_page,
+            'credits_q': credits_q,
+            'credits_status': credits_status,
+            'credits_date_from': credits_date_from,
+            'credits_date_to': credits_date_to,
+            'credit_status_choices': CashbackCredit.Status.choices,
+            'active': 'admin_cashback',
         },
     )
 
@@ -1177,6 +1238,9 @@ def admin_user_update_view(request, user_id):
             max_bet_raw = request.POST.get('max_bet_amount', '').strip()
             commission_raw = request.POST.get('commission_rate', '').strip()
             is_betting_enabled = request.POST.get('is_betting_enabled') == 'on'
+            cashback_enabled_raw = request.POST.get('cashback_enabled_override', '').strip()
+            cashback_rate_raw = request.POST.get('cashback_rate_override', '').strip()
+            cashback_multiplier_raw = request.POST.get('cashback_wagering_multiplier_override', '').strip()
 
             user.role = new_role
             if _is_full_admin(request.user):
@@ -1216,6 +1280,33 @@ def admin_user_update_view(request, user_id):
                 raise ValidationError('Maximum bet cannot be negative.')
 
             user.is_betting_enabled = is_betting_enabled
+
+            # Three-way: blank = inherit the global cashback setting.
+            if cashback_enabled_raw == 'on':
+                user.cashback_enabled_override = True
+            elif cashback_enabled_raw == 'off':
+                user.cashback_enabled_override = False
+            else:
+                user.cashback_enabled_override = None
+
+            try:
+                user.cashback_rate_override = Decimal(cashback_rate_raw) if cashback_rate_raw else None
+            except InvalidOperation:
+                raise ValidationError('Cashback rate override must be a valid decimal number.')
+            if user.cashback_rate_override is not None and not (0 <= user.cashback_rate_override <= 99):
+                raise ValidationError('Cashback rate override must be between 0 and 99.')
+
+            try:
+                user.cashback_wagering_multiplier_override = (
+                    Decimal(cashback_multiplier_raw) if cashback_multiplier_raw else None
+                )
+            except InvalidOperation:
+                raise ValidationError('Cashback wagering multiplier override must be a valid decimal number.')
+            if user.cashback_wagering_multiplier_override is not None and not (
+                0 <= user.cashback_wagering_multiplier_override <= 20
+            ):
+                raise ValidationError('Cashback wagering multiplier override must be between 0 and 20.')
+
             user.save()
 
             create_audit_log(
@@ -1227,6 +1318,7 @@ def admin_user_update_view(request, user_id):
                     'role': user.role,
                     'commission_rate': str(user.commission_rate),
                     'is_betting_enabled': user.is_betting_enabled,
+                    'cashback_enabled_override': user.cashback_enabled_override,
                 },
                 ip_address=_get_ip(request),
             )
@@ -1747,6 +1839,7 @@ def _wallet_context(user, extra=None):
         'wallet': wallet,
         'transactions': transactions,
         'pending_deposits': pending_deposits,
+        'cashback_credits': CashbackCredit.objects.filter(user=user).order_by('-created_at')[:25],
         'active': 'wallet',
         # The self-confirm button must only ever be usable when the mock
         # provider is active (local/dev). It is never shown against a real

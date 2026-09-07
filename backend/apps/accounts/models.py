@@ -54,6 +54,25 @@ class User(AbstractUser):
         verbose_name=_('Maximum bet amount'),
     )
     is_betting_enabled = models.BooleanField(default=True)
+    cashback_enabled_override = models.BooleanField(
+        null=True,
+        blank=True,
+        verbose_name=_('Cashback enabled (blank = inherit global setting)'),
+    )
+    cashback_rate_override = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_('Cashback rate % override (blank = inherit global default)'),
+    )
+    cashback_wagering_multiplier_override = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_('Cashback wagering multiplier override (blank = inherit global default)'),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     USERNAME_FIELD = 'email'

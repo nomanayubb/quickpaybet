@@ -60,6 +60,24 @@
         <div class="form-group">
             <label><input type="checkbox" name="is_betting_enabled" {% if edit_user.is_betting_enabled %}checked{% endif %}> Betting enabled</label>
         </div>
+        <div class="form-group">
+            <label>Cashback</label>
+            <select name="cashback_enabled_override">
+                <option value="" {% if edit_user.cashback_enabled_override == None %}selected{% endif %}>Inherit global setting</option>
+                <option value="on" {% if edit_user.cashback_enabled_override == True %}selected{% endif %}>Force on</option>
+                <option value="off" {% if edit_user.cashback_enabled_override == False %}selected{% endif %}>Force off</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Cashback rate (%) override</label>
+            <input type="number" name="cashback_rate_override" step="0.01" min="0" max="99"
+                   value="{{ edit_user.cashback_rate_override|default_if_none:'' }}" placeholder="Leave blank to inherit global default">
+        </div>
+        <div class="form-group">
+            <label>Cashback wagering multiplier override</label>
+            <input type="number" name="cashback_wagering_multiplier_override" step="0.01" min="0" max="20"
+                   value="{{ edit_user.cashback_wagering_multiplier_override|default_if_none:'' }}" placeholder="Leave blank to inherit global default">
+        </div>
         <button type="submit" class="btn">Save changes</button>
     </form>
 

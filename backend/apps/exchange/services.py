@@ -4,6 +4,7 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 from apps.bets.models import Bet
+from apps.cashback.services import credit_cashback_for_loss, record_wager
 from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
 
@@ -59,6 +60,7 @@ def place_order(user, match_id: int, selection: str, side: str, odds: Decimal, s
             raise ValidationError('Insufficient available balance for this order.')
         wallet.reserved_balance += exposure
         wallet.save(update_fields=['reserved_balance', 'updated_at'])
+        record_wager(wallet, stake)
 
         order = ExchangeOrder.objects.create(
             user=user,
@@ -227,6 +229,9 @@ def _settle_fill(fill_id: int, result: str, commission_rate: Decimal) -> None:
         fill.status = ExchangeFill.Status.BACK_WON if back_won else ExchangeFill.Status.LAY_WON
         fill.commission_amount = commission
         fill.save(update_fields=['status', 'commission_amount'])
+
+        loser = lay_order if back_won else back_order
+        credit_cashback_for_loss(loser.user, profit, f'Exchange fill #{fill.id} loss')
 
 
 def _void_fill(fill_id: int) -> None:
@@ -446,6 +451,7 @@ def cash_out_order(user, order_id: int) -> dict:
 
         wallet.reserved_balance += exposure
         wallet.save(update_fields=['reserved_balance', 'updated_at'])
+        record_wager(wallet, stake_needed)
 
         cash_out_leg = ExchangeOrder.objects.create(
             user=user,

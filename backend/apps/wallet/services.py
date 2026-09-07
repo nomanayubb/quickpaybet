@@ -44,7 +44,7 @@ def withdraw_funds(user, amount: Decimal, description: str = 'Crypto withdrawal'
 
     with transaction.atomic():
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=user)
-        if wallet.available_balance < amount:
+        if wallet.withdrawable_balance < amount:
             raise ValidationError('Insufficient available balance.')
 
         wallet.balance -= amount

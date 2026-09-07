@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
+from apps.cashback.services import credit_cashback_for_loss, record_wager
 from apps.sports.models import Match
 from apps.wallet.models import Wallet, WalletTransaction
 from .models import Bet, ParlayBet, ParlayLeg
@@ -63,6 +64,7 @@ def place_bet(user, match_id: int, selection: str, stake: Decimal) -> Bet:
 
         wallet.balance -= stake
         wallet.save(update_fields=['balance', 'updated_at'])
+        record_wager(wallet, stake)
 
         WalletTransaction.objects.create(
             wallet=wallet,
@@ -224,6 +226,7 @@ def place_parlay_bet(user, stake: Decimal, selections: list):
 
         wallet.balance -= stake
         wallet.save(update_fields=['balance', 'updated_at'])
+        record_wager(wallet, stake)
 
         WalletTransaction.objects.create(
             wallet=wallet,
@@ -269,6 +272,7 @@ def _settle_parlay_if_ready(parlay_id: int):
             parlay.status = ParlayBet.Status.LOST
             parlay.save(update_fields=['status', 'updated_at'])
             _credit_affiliate_commission_on_parlay(parlay)
+            credit_cashback_for_loss(parlay.user, parlay.stake, f'Parlay #{parlay.id} loss')
             return
 
         has_refunded = any(leg.outcome == ParlayLeg.Outcome.REFUNDED for leg in legs)
@@ -368,6 +372,7 @@ def settle_bet(bet: Bet, match_result: str):
         bet.status = Bet.Status.LOST
         bet.save(update_fields=['status', 'updated_at'])
         _credit_affiliate_commission(bet)
+        credit_cashback_for_loss(bet.user, bet.stake, f'Bet #{bet.id} loss')
 
 
 def refund_bet(bet: Bet):
