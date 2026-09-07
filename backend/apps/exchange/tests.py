@@ -19,7 +19,7 @@ from .services import (
     get_order_book,
     place_order,
     settle_exchange_for_match,
-    sync_house_lay_orders_for_match,
+    sync_house_orders_for_match,
 )
 
 User = get_user_model()
@@ -545,36 +545,41 @@ class HouseLaySeedingTests(TestCase):
     def test_disabled_config_is_a_no_op(self):
         self.config.is_enabled = False
         self.config.save()
-        sync_house_lay_orders_for_match(self.match)
+        sync_house_orders_for_match(self.match)
         self.assertEqual(ExchangeOrder.objects.filter(user=self.house_user).count(), 0)
 
     def test_no_house_user_is_a_no_op(self):
         self.house_user.is_house_account = False
         self.house_user.save(update_fields=['is_house_account'])
-        sync_house_lay_orders_for_match(self.match)
+        sync_house_orders_for_match(self.match)
         self.assertEqual(ExchangeOrder.objects.count(), 0)
 
-    def test_house_seeds_lay_order_after_odds_write(self):
-        sync_house_lay_orders_for_match(self.match)
-        order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
-        self.assertEqual(order.side, ExchangeOrder.Side.LAY)
-        self.assertEqual(order.odds, Decimal('2.10'))  # 2.00 back + 0.10 spread
+    def test_house_seeds_both_back_and_lay_orders_after_odds_write(self):
+        sync_house_orders_for_match(self.match)
+        back_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='back')
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='lay')
+        # Back is the genuine, unmodified Pinnacle price - never adjusted.
+        self.assertEqual(back_order.odds, Decimal('2.00'))
+        self.assertEqual(lay_order.odds, Decimal('2.10'))  # 2.00 back + 0.10 spread
 
-    def test_house_seeds_all_three_selections_for_3way_match(self):
-        sync_house_lay_orders_for_match(self.match)
-        selections = set(
-            ExchangeOrder.objects.filter(user=self.house_user).values_list('selection', flat=True)
+    def test_house_seeds_both_sides_of_all_three_selections_for_3way_match(self):
+        sync_house_orders_for_match(self.match)
+        rows = set(
+            ExchangeOrder.objects.filter(user=self.house_user).values_list('selection', 'side')
         )
-        self.assertEqual(selections, {'home', 'draw', 'away'})
+        self.assertEqual(
+            rows,
+            {('home', 'back'), ('home', 'lay'), ('draw', 'back'), ('draw', 'lay'), ('away', 'back'), ('away', 'lay')},
+        )
 
-    def test_2way_match_never_gets_a_draw_house_order(self):
+    def test_2way_match_never_gets_a_draw_house_order_on_either_side(self):
         two_way = Match.objects.create(
             sport=self.sport, home_team='H2', away_team='A2',
             start_time=timezone.now() + timezone.timedelta(days=1),
             status=Match.Status.SCHEDULED,
             odds_home=Decimal('1.80'), odds_draw=None, odds_away=Decimal('2.20'),
         )
-        sync_house_lay_orders_for_match(two_way)
+        sync_house_orders_for_match(two_way)
         selections = set(
             ExchangeOrder.objects.filter(user=self.house_user, match=two_way).values_list('selection', flat=True)
         )
@@ -583,13 +588,15 @@ class HouseLaySeedingTests(TestCase):
     def test_per_match_override_beats_global_default(self):
         self.match.lay_spread_override = Decimal('1.00')
         self.match.save(update_fields=['lay_spread_override'])
-        sync_house_lay_orders_for_match(self.match)
-        order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
-        self.assertEqual(order.odds, Decimal('3.00'))  # 2.00 back + 1.00 override spread
+        sync_house_orders_for_match(self.match)
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='lay')
+        self.assertEqual(lay_order.odds, Decimal('3.00'))  # 2.00 back + 1.00 override spread
+        back_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='back')
+        self.assertEqual(back_order.odds, Decimal('2.00'))  # unaffected by the lay spread override
 
     def test_real_user_can_back_against_house_seeded_lay_order_and_it_settles_correctly(self):
-        sync_house_lay_orders_for_match(self.match)
-        house_order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+        sync_house_orders_for_match(self.match)
+        house_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='lay')
 
         back = place_order(self.real_user, self.match.id, 'home', 'back', Decimal('2.10'), Decimal('50'))
         back.refresh_from_db()
@@ -614,51 +621,92 @@ class HouseLaySeedingTests(TestCase):
         self.assertEqual(real_user_balance_after, real_user_balance_before + Decimal('52.25000000'))
         self.assertEqual(house_balance_after, house_balance_before - Decimal('55'))
 
-    def test_exposure_cap_stops_new_house_liquidity_once_hit(self):
+    def test_real_user_can_lay_against_house_seeded_back_order_and_it_settles_correctly(self):
+        sync_house_orders_for_match(self.match)
+        house_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='back')
+
+        lay = place_order(self.real_user, self.match.id, 'home', 'lay', Decimal('2.00'), Decimal('50'))
+        lay.refresh_from_db()
+        house_order.refresh_from_db()
+        self.assertEqual(lay.matched_stake, Decimal('50'))
+        fill = ExchangeFill.objects.get(back_order=house_order, lay_order=lay)
+        self.assertEqual(fill.odds, Decimal('2.00'))
+
+        real_user_balance_before = Wallet.objects.get(user=self.real_user).balance
+        house_balance_before = Wallet.objects.get(user=self.house_user).balance
+
+        self.match.status = Match.Status.FINISHED
+        self.match.home_score, self.match.away_score = 0, 1  # home does not win - lay wins
+        self.match.save()
+        settle_exchange_for_match(self.match)
+
+        # Real user laid at 2.00 and won (home didn't win): keeps the
+        # house's stake (50), minus 5% commission = 2.50, net = 47.50.
+        real_user_balance_after = Wallet.objects.get(user=self.real_user).balance
+        house_balance_after = Wallet.objects.get(user=self.house_user).balance
+        self.assertEqual(real_user_balance_after, real_user_balance_before + Decimal('47.5'))
+        self.assertEqual(house_balance_after, house_balance_before - Decimal('50'))
+
+    def test_exposure_cap_is_shared_and_split_between_both_sides(self):
         self.match.house_max_liability_override = Decimal('10')
         self.match.save(update_fields=['house_max_liability_override'])
-        sync_house_lay_orders_for_match(self.match)
-        order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
-        # Liability = stake * (odds - 1) = cap (10) / (2.10 - 1) = ~9.0909...
-        self.assertLessEqual(order.stake * (order.odds - 1), Decimal('10'))
+        sync_house_orders_for_match(self.match)
 
-        # Fully match the house's offered liquidity, then reseed again -
-        # committed liability is already at (or effectively at) the cap, so
-        # no further stake should be offered.
-        place_order(self.real_user, self.match.id, 'home', 'back', Decimal('2.10'), order.stake)
-        cache.clear()  # allow a fresh reseed pass (the lock would otherwise still be held)
+        back_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='back')
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='lay')
+        # Each side gets HALF the cap's worth of potential liability, not
+        # the full cap each - this is what makes the cap genuinely shared.
+        self.assertLessEqual(back_order.stake, Decimal('5'))
+        self.assertLessEqual(lay_order.stake * (lay_order.odds - 1), Decimal('5'))
+
+        # Fully match both sides via the same real user (different orders,
+        # not self-matching - the counterparty on both is the house).
+        place_order(self.real_user, self.match.id, 'home', 'back', lay_order.odds, lay_order.stake)
+        place_order(self.real_user, self.match.id, 'home', 'lay', back_order.odds, back_order.stake)
+
+        # Combined liability is now at (or effectively at) the cap - a
+        # further reseed must offer no new stake on either side.
+        cache.clear()
         orders_before = ExchangeOrder.objects.filter(user=self.house_user, selection='home').count()
-        sync_house_lay_orders_for_match(self.match)
+        sync_house_orders_for_match(self.match)
         orders_after = ExchangeOrder.objects.filter(user=self.house_user, selection='home').count()
         self.assertEqual(orders_before, orders_after)
 
-    def test_stale_house_order_replaced_without_touching_matched_fills(self):
-        sync_house_lay_orders_for_match(self.match)
-        original_order = ExchangeOrder.objects.get(user=self.house_user, selection='home')
+    def test_stale_house_orders_replaced_on_both_sides_without_touching_matched_fills(self):
+        sync_house_orders_for_match(self.match)
+        original_back = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='back')
+        original_lay = ExchangeOrder.objects.get(user=self.house_user, selection='home', side='lay')
 
-        # Partially match it.
+        # Partially match the lay side only - the back side stays fully unmatched.
         place_order(self.real_user, self.match.id, 'home', 'back', Decimal('2.10'), Decimal('10'))
-        original_fill = ExchangeFill.objects.get(lay_order=original_order)
+        original_fill = ExchangeFill.objects.get(lay_order=original_lay)
 
         # Odds move; reseed again.
         self.match.odds_home = Decimal('2.50')
         self.match.save(update_fields=['odds_home'])
         cache.clear()
-        sync_house_lay_orders_for_match(self.match)
+        sync_house_orders_for_match(self.match)
 
-        original_order.refresh_from_db()
+        original_back.refresh_from_db()
+        original_lay.refresh_from_db()
         original_fill.refresh_from_db()
-        self.assertEqual(original_order.status, ExchangeOrder.Status.CANCELLED)
-        self.assertEqual(original_order.matched_stake, Decimal('10'))  # untouched
+
+        self.assertEqual(original_back.status, ExchangeOrder.Status.CANCELLED)  # fully unmatched, cancelled outright
+        self.assertEqual(original_lay.status, ExchangeOrder.Status.CANCELLED)  # unmatched remainder cancelled
+        self.assertEqual(original_lay.matched_stake, Decimal('10'))  # matched portion untouched
         self.assertEqual(original_fill.odds, Decimal('2.10'))  # untouched
         self.assertEqual(original_fill.status, ExchangeFill.Status.PENDING)
 
-        new_order = ExchangeOrder.objects.get(
-            user=self.house_user, selection='home', status=ExchangeOrder.Status.OPEN,
+        new_back = ExchangeOrder.objects.get(
+            user=self.house_user, selection='home', side='back', status=ExchangeOrder.Status.OPEN,
         )
-        self.assertEqual(new_order.odds, Decimal('2.60'))  # 2.50 + 0.10
+        new_lay = ExchangeOrder.objects.get(
+            user=self.house_user, selection='home', side='lay', status=ExchangeOrder.Status.OPEN,
+        )
+        self.assertEqual(new_back.odds, Decimal('2.50'))
+        self.assertEqual(new_lay.odds, Decimal('2.60'))  # 2.50 + 0.10
 
     def test_concurrent_reseed_calls_for_same_match_do_not_double_liquidity(self):
         cache.add(_house_reseed_lock_key(self.match.id), True, timeout=15)
-        sync_house_lay_orders_for_match(self.match)
+        sync_house_orders_for_match(self.match)
         self.assertEqual(ExchangeOrder.objects.filter(user=self.house_user).count(), 0)

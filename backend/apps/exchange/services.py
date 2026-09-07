@@ -599,33 +599,51 @@ def _house_reseed_lock_key(match_id: int) -> str:
 
 def _house_committed_liability(house_user, match, selection) -> Decimal:
     """
-    Real, currently-outstanding house liability on this match+selection:
-    every MATCHED stake unit across all the house's own lay orders here
-    (any status except VOID - a CANCELLED order's already-matched portion
-    is still a live ExchangeFill the house owes on if the selection wins;
-    only its unmatched remainder disappeared on cancel). VOID only ever
-    happens post-settlement/cancellation, by which point
-    sync_house_lay_orders_for_match no longer runs for this match anyway
-    (see its own SCHEDULED/LIVE guard below).
+    Real, currently-outstanding house liability on this match+selection,
+    across BOTH sides (back and lay) the house may be resting on - every
+    MATCHED stake unit, valued via the same _exposure_rate() formula
+    already used everywhere else in this module, on any of the house's own
+    orders here except VOID ones (a CANCELLED order's already-matched
+    portion is still a live ExchangeFill the house owes on if the result
+    goes against it; only its unmatched remainder disappeared on cancel).
+    VOID only ever happens post-settlement/cancellation, by which point
+    sync_house_orders_for_match no longer runs for this match anyway (see
+    its own SCHEDULED/LIVE guard below). Summing both sides here - not
+    just lay - is what makes the exposure cap a genuinely SHARED ceiling
+    on the house's total risk on this selection, not a separate cap per
+    side.
     """
     orders = ExchangeOrder.objects.filter(
-        user=house_user, match=match, selection=selection, side=ExchangeOrder.Side.LAY,
+        user=house_user, match=match, selection=selection,
     ).exclude(status=ExchangeOrder.Status.VOID)
-    return sum((o.matched_stake * (o.odds - 1) for o in orders), Decimal('0'))
+    return sum((o.matched_stake * _exposure_rate(o.side, o.odds) for o in orders), Decimal('0'))
 
 
-def sync_house_lay_orders_for_match(match: Match) -> None:
+def sync_house_orders_for_match(match: Match) -> None:
     """
     Called right after match.odds_home/draw/away are (re)written - from
     apps.sports.realtime.maybe_refresh_sport_odds() and
     apps.sports.management.commands.sync_odds._process_match(), the same
     two call sites apply_odds_adjustment() already hooks into. For each
     selection this match actually has (skips 'draw' entirely for a 2-way
-    match - no draw lay price or house order can ever be created for one
-    by construction), computes the target lay price, cancels the house's
-    stale UNMATCHED resting order there if one exists (already-matched
-    fills are historical and are never touched), and places one fresh
-    house lay order sized to exactly fill whatever cap headroom remains.
+    match - no draw order can ever be created for one by construction),
+    cancels the house's stale UNMATCHED resting order on EACH side there
+    if one exists (already-matched fills are historical and are never
+    touched), then places one fresh house order per side:
+      - BACK at the match's own real back odds, unmodified - "back" here
+        is always the genuine Pinnacle/ParlayAPI price, identical to what
+        the sportsbook itself shows, so there is never a back-vs-back
+        discrepancy between apps.bets and apps.exchange to arbitrage.
+      - LAY at compute_lay_price() (back + spread), unchanged from before.
+
+    The configured liability cap is SHARED between the two fresh orders -
+    split 50/50 - rather than given in full to each independently. This is
+    the only way to guarantee the house's worst case (both orders getting
+    fully matched by different users before the next reseed) never exceeds
+    the cap: a resting order's unmatched stake is a real potential future
+    liability the moment it's placed, not only once it's actually matched,
+    so headroom must be divided between the two orders being placed in the
+    SAME pass, not computed independently for each.
 
     No-ops immediately unless HouseLiquidityConfig.is_enabled, a house
     account has been configured, and the match is still open for betting -
@@ -679,8 +697,7 @@ def sync_house_lay_orders_for_match(match: Match) -> None:
 
         with transaction.atomic():
             stale_orders = ExchangeOrder.objects.select_for_update().filter(
-                user=house_user, match=match, selection=selection,
-                side=ExchangeOrder.Side.LAY, status=ExchangeOrder.Status.OPEN,
+                user=house_user, match=match, selection=selection, status=ExchangeOrder.Status.OPEN,
             )
             for stale in stale_orders:
                 if stale.unmatched_stake > 0:
@@ -691,18 +708,32 @@ def sync_house_lay_orders_for_match(match: Match) -> None:
         if headroom <= 0:
             continue
 
-        stake_to_offer = (headroom / (lay_price - 1)).quantize(
+        half_headroom = headroom / 2
+
+        back_stake_to_offer = (half_headroom / _exposure_rate(ExchangeOrder.Side.BACK, back_odds)).quantize(
             Decimal('0.00000001'), rounding=ROUND_DOWN,
         )
-        if stake_to_offer <= 0:
-            continue
+        if back_stake_to_offer > 0:
+            try:
+                place_order(
+                    user=house_user, match_id=match.id, selection=selection,
+                    side=ExchangeOrder.Side.BACK, odds=back_odds, stake=back_stake_to_offer,
+                )
+            except ValidationError as exc:
+                logger.warning(
+                    'House back reseed skipped for match %s selection %s: %s', match.id, selection, exc,
+                )
 
-        try:
-            place_order(
-                user=house_user, match_id=match.id, selection=selection,
-                side=ExchangeOrder.Side.LAY, odds=lay_price, stake=stake_to_offer,
-            )
-        except ValidationError as exc:
-            logger.warning(
-                'House lay reseed skipped for match %s selection %s: %s', match.id, selection, exc,
-            )
+        lay_stake_to_offer = (half_headroom / _exposure_rate(ExchangeOrder.Side.LAY, lay_price)).quantize(
+            Decimal('0.00000001'), rounding=ROUND_DOWN,
+        )
+        if lay_stake_to_offer > 0:
+            try:
+                place_order(
+                    user=house_user, match_id=match.id, selection=selection,
+                    side=ExchangeOrder.Side.LAY, odds=lay_price, stake=lay_stake_to_offer,
+                )
+            except ValidationError as exc:
+                logger.warning(
+                    'House lay reseed skipped for match %s selection %s: %s', match.id, selection, exc,
+                )

@@ -93,8 +93,8 @@ class Command(BaseCommand):
             defaults=defaults,
         )
 
-        from apps.exchange.services import sync_house_lay_orders_for_match
-        sync_house_lay_orders_for_match(match_obj)
+        from apps.exchange.services import sync_house_orders_for_match
+        sync_house_orders_for_match(match_obj)
 
         if was_created:
             created_counter += 1

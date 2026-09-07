@@ -135,8 +135,8 @@ def maybe_refresh_sport_odds(sport: Sport, interval_seconds: int) -> bool:
                     OddsHistoryEntry(match=m, odds_home=adj_home, odds_draw=adj_draw, odds_away=adj_away)
                 )
 
-            from apps.exchange.services import sync_house_lay_orders_for_match
-            sync_house_lay_orders_for_match(m)
+            from apps.exchange.services import sync_house_orders_for_match
+            sync_house_orders_for_match(m)
 
     if history_entries:
         OddsHistoryEntry.objects.bulk_create(history_entries)

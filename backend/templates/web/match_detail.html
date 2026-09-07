@@ -116,35 +116,53 @@
             <p><a href="{% url 'web:login' %}?next={{ request.path }}">Login</a> to back or lay this match.</p>
         {% else %}
             {% for selection, sides in order_book.items %}
-                <h4 style="text-transform:capitalize;">{{ selection }}</h4>
-                <table>
-                    <thead><tr><th>Lay odds (bet against)</th><th>Available</th><th>Back odds (bet for)</th><th>Available</th></tr></thead>
-                    <tbody>
-                        <tr>
-                            <td>
-                                {% for row in sides.lay %}{{ row.odds }} ({{ row.total_stake }})<br>{% empty %}&mdash;{% endfor %}
-                            </td>
-                            <td></td>
-                            <td>
-                                {% for row in sides.back %}{{ row.odds }} ({{ row.total_stake }})<br>{% empty %}&mdash;{% endfor %}
-                            </td>
-                            <td></td>
-                        </tr>
-                    </tbody>
-                </table>
-
-                <form method="post" action="{% url 'web:exchange_place_order' match.pk %}" style="margin-bottom:16px;">
-                    {% csrf_token %}
-                    <input type="hidden" name="selection" value="{{ selection }}">
-                    <select name="side">
-                        <option value="back">Back {{ selection }}</option>
-                        <option value="lay">Lay {{ selection }}</option>
-                    </select>
-                    <input type="number" name="odds" step="0.01" min="1.01" placeholder="Odds" required style="width:90px;">
-                    <input type="number" name="stake" step="0.01" min="0.01" placeholder="Stake" required style="width:100px;">
-                    <button type="submit" class="btn">Place Order</button>
-                </form>
+                {% with best_back=sides.back.0 best_lay=sides.lay.0 %}
+                    <div class="market-row">
+                        <span class="market-selection-label">{{ selection }}</span>
+                        <button type="button" class="back-box exchange-price-box" data-selection="{{ selection }}"
+                                data-side="back" data-odds="{{ best_back.odds|default:'' }}" {% if not best_back %}disabled{% endif %}>
+                            <div class="price">{{ best_back.odds|default:"—" }}</div>
+                            <div class="stake">{{ best_back.total_stake|default:"" }}</div>
+                        </button>
+                        <button type="button" class="lay-box exchange-price-box" data-selection="{{ selection }}"
+                                data-side="lay" data-odds="{{ best_lay.odds|default:'' }}" {% if not best_lay %}disabled{% endif %}>
+                            <div class="price">{{ best_lay.odds|default:"—" }}</div>
+                            <div class="stake">{{ best_lay.total_stake|default:"" }}</div>
+                        </button>
+                    </div>
+                {% endwith %}
             {% endfor %}
+
+            <form method="post" id="exchange-order-form" action="{% url 'web:exchange_place_order' match.pk %}" style="margin:16px 0;">
+                {% csrf_token %}
+                <select name="selection" id="exchange-selection">
+                    {% for selection in order_book.keys %}
+                        <option value="{{ selection }}" style="text-transform:capitalize;">{{ selection }}</option>
+                    {% endfor %}
+                </select>
+                <select name="side" id="exchange-side">
+                    <option value="back">Back</option>
+                    <option value="lay">Lay</option>
+                </select>
+                <input type="number" name="odds" id="exchange-odds" step="0.01" min="1.01" placeholder="Odds" required style="width:90px;">
+                <input type="number" name="stake" step="0.01" min="0.01" placeholder="Stake" required style="width:100px;">
+                <button type="submit" class="btn">Place Order</button>
+            </form>
+            <script>
+                (function () {
+                    var selectionEl = document.getElementById('exchange-selection');
+                    var sideEl = document.getElementById('exchange-side');
+                    var oddsEl = document.getElementById('exchange-odds');
+                    document.querySelectorAll('.exchange-price-box').forEach(function (box) {
+                        box.addEventListener('click', function () {
+                            if (box.disabled) { return; }
+                            if (selectionEl) { selectionEl.value = box.getAttribute('data-selection'); }
+                            if (sideEl) { sideEl.value = box.getAttribute('data-side'); }
+                            if (oddsEl) { oddsEl.value = box.getAttribute('data-odds'); }
+                        });
+                    });
+                })();
+            </script>
 
             {% if my_exchange_orders %}
                 <h4>Your Open Orders (this match)</h4>
