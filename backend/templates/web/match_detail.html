@@ -13,6 +13,7 @@
         Away: <span id="odds-away">{{ display_odds_away|default:"-" }}</span>
         <span style="color:#888;font-size:12px;">(lay ref. {{ display_lay_away|default:"-" }})</span>
     </p>
+    <button type="button" id="manual-refresh-btn" class="btn" hidden>🔄 Refresh Odds</button>
 
     {% if match.status == 'live' or match.status == 'scheduled' %}
         <h3>Place a Bet</h3>
@@ -60,6 +61,8 @@
                     selectionEl.addEventListener('change', syncOddsShownToSelection);
                 }
 
+                var refreshBtn = document.getElementById('manual-refresh-btn');
+
                 function applyOdds(data) {
                     var map = {home: data.odds_home, draw: data.odds_draw, away: data.odds_away};
                     ['home', 'draw', 'away'].forEach(function (key) {
@@ -79,6 +82,9 @@
                         }
                     });
                     syncOddsShownToSelection();
+                    if (refreshBtn) {
+                        refreshBtn.hidden = !data.manual_refresh_available;
+                    }
                 }
 
                 function poll() {
@@ -96,6 +102,19 @@
                         });
                 }
                 poll();
+
+                if (refreshBtn) {
+                    refreshBtn.addEventListener('click', function () {
+                        refreshBtn.disabled = true;
+                        fetch(pollUrl + '?refresh=manual')
+                            .then(function (r) { return r.json(); })
+                            .then(function (data) {
+                                applyOdds(data);
+                                refreshBtn.disabled = false;
+                            })
+                            .catch(function () { refreshBtn.disabled = false; });
+                    });
+                }
             })();
         </script>
     {% endif %}

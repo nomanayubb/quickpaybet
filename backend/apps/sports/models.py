@@ -5,6 +5,21 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
+class RefreshMode(models.TextChoices):
+    """
+    How/whether a match's odds refresh in real time - see
+    apps.sports.realtime.resolve_effective_refresh_mode() for the
+    global+per-match resolution and apps.web.views.match_odds_poll_view
+    for where this actually gets consulted. Defined at module top since
+    both Match (per-match override) and RealtimeOddsConfig (global
+    default), below, reference it.
+    """
+    VIEWER_GATED = 'viewer_gated', 'Viewer-gated (default) - refresh on schedule only when enough viewers are watching'
+    ALWAYS = 'always', 'Always - refresh on schedule regardless of viewer count'
+    MANUAL_ONLY = 'manual_only', 'Manual only - never auto-refresh, only when explicitly triggered'
+    STOPPED = 'stopped', 'Stopped - fully frozen, no refresh at all (even manual)'
+
+
 class Sport(models.Model):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True)
@@ -115,6 +130,10 @@ class Match(models.Model):
         validators=[MinValueValidator(Decimal('0.00'))],
         verbose_name='Max house liability per selection override for this match (blank = use the global default)',
     )
+    refresh_mode_override = models.CharField(
+        max_length=15, choices=RefreshMode.choices, null=True, blank=True,
+        verbose_name='Refresh mode override for this match (blank = use the global default)',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -139,10 +158,24 @@ class RealtimeOddsConfig(models.Model):
     no separate background timer anywhere; a viewer's own poll request is
     what triggers a refresh check, at most once per configured interval
     per sport, regardless of how many viewers are polling at once.
+
+    default_refresh_mode (+ Match.refresh_mode_override for a per-match
+    override) sits one layer above the timing fields below - it decides
+    WHETHER/HOW a refresh check happens at all (viewer-gated, always,
+    manual-only, or fully stopped); live_refresh_seconds etc. still decide
+    the actual interval whenever a refresh is allowed to happen. This
+    keeps the "how often" and "under what condition" concerns separate,
+    matching how apps.sports.realtime.get_effective_refresh_interval() and
+    the new resolve_effective_refresh_mode() are two independent
+    resolutions consulted together, never merged into one field.
     """
     is_enabled = models.BooleanField(
         default=False,
         verbose_name='Real-time odds refresh enabled (global switch)',
+    )
+    default_refresh_mode = models.CharField(
+        max_length=15, choices=RefreshMode.choices, default=RefreshMode.VIEWER_GATED,
+        verbose_name='Default refresh mode (global)',
     )
     live_refresh_seconds = models.PositiveIntegerField(
         default=20,

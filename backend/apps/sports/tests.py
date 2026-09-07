@@ -16,7 +16,7 @@ from apps.wallet.services import deposit_funds
 
 from .models import (
     BackMode, HouseLiquidityConfig, LayMode, Match, OddsAdjustmentConfig, OddsHistoryEntry,
-    PricingOverride, RealtimeOddsConfig, Sport, UserMatchOddsOverride,
+    PricingOverride, RealtimeOddsConfig, RefreshMode, Sport, UserMatchOddsOverride,
 )
 from .pricing import (
     apply_odds_adjustment,
@@ -41,6 +41,7 @@ from .realtime import (
     get_effective_refresh_interval,
     maybe_refresh_sport_odds,
     record_viewer_heartbeat,
+    resolve_effective_refresh_mode,
 )
 
 User = get_user_model()
@@ -860,3 +861,27 @@ class PricingModeResolutionTests(TestCase):
         PricingOverride.objects.create(match=self.match, lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('0.40'))
         lay_home, _, _ = get_effective_lay_reference_for_user(self.match, self.user)
         self.assertEqual(lay_home, Decimal('2.40'))  # 2.00 + 0.40, no user override present
+
+
+class RefreshModeResolutionTests(TestCase):
+    def setUp(self):
+        RealtimeOddsConfig.objects.filter(pk=1).delete()
+        self.config = RealtimeOddsConfig.objects.create(pk=1, default_refresh_mode=RefreshMode.VIEWER_GATED)
+        self.sport = Sport.objects.create(name='RefreshModeResSport', slug='refresh-mode-res-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+        )
+
+    def test_falls_back_to_global_default_when_no_match_override(self):
+        self.assertEqual(resolve_effective_refresh_mode(self.match, self.config), RefreshMode.VIEWER_GATED)
+
+    def test_match_override_beats_global_default(self):
+        self.match.refresh_mode_override = RefreshMode.STOPPED
+        self.match.save(update_fields=['refresh_mode_override'])
+        self.assertEqual(resolve_effective_refresh_mode(self.match, self.config), RefreshMode.STOPPED)
+
+    def test_global_default_can_itself_be_changed(self):
+        self.config.default_refresh_mode = RefreshMode.ALWAYS
+        self.config.save()
+        self.assertEqual(resolve_effective_refresh_mode(self.match, self.config), RefreshMode.ALWAYS)

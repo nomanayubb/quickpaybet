@@ -34,6 +34,17 @@ def record_viewer_heartbeat(match: Match, viewer_key: str, stale_after_seconds: 
     return len(viewers)
 
 
+def resolve_effective_refresh_mode(match: Match, config: RealtimeOddsConfig) -> str:
+    """
+    Most-specific-wins: the match's own refresh_mode_override if set, else
+    the site-wide default. Deliberately global+per-match only, not
+    per-user like Phase 7/8's pricing overrides - refresh timing is a
+    shared, public concern (everyone sees the same match update at the
+    same cadence), not something that should differ per viewer.
+    """
+    return match.refresh_mode_override if match.refresh_mode_override is not None else config.default_refresh_mode
+
+
 def get_effective_refresh_interval(match: Match, config: RealtimeOddsConfig):
     """
     Returns the refresh interval (seconds) that applies to `match` right

@@ -26,7 +26,10 @@ class TournamentAdmin(admin.ModelAdmin):
 
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
-    list_display = ('home_team', 'away_team', 'sport', 'status', 'start_time', 'odds_adjustment_flag')
+    list_display = (
+        'home_team', 'away_team', 'sport', 'status', 'start_time',
+        'odds_adjustment_flag', 'refresh_mode_flag',
+    )
     list_filter = ('sport', 'status')
     search_fields = ('home_team', 'away_team')
     date_hierarchy = 'start_time'
@@ -35,6 +38,10 @@ class MatchAdmin(admin.ModelAdmin):
     @admin.display(description='Odds override')
     def odds_adjustment_flag(self, obj):
         return 'Active' if obj.odds_adjustment is not None else ''
+
+    @admin.display(description='Refresh mode override')
+    def refresh_mode_flag(self, obj):
+        return obj.get_refresh_mode_override_display() if obj.refresh_mode_override is not None else ''
 
     fieldsets = (
         (None, {
@@ -60,8 +67,19 @@ class MatchAdmin(admin.ModelAdmin):
                 'Leave blank to use the site-wide defaults (House Liquidity Config, below).'
             ),
         }),
+        ('Refresh mode', {
+            'fields': ('refresh_mode_override',),
+            'description': (
+                'Optional per-match override for how this match\'s odds refresh in real time '
+                '(viewer-gated, always, manual only, or fully stopped). '
+                'Leave blank to use the site-wide default (Realtime Odds Config).'
+            ),
+        }),
     )
-    actions = ['settle_selected_matches', 'cancel_selected_matches', 'reset_odds_adjustment_to_default']
+    actions = [
+        'settle_selected_matches', 'cancel_selected_matches',
+        'reset_odds_adjustment_to_default', 'reset_refresh_mode_to_default',
+    ]
 
     @admin.action(description='Settle selected matches')
     def settle_selected_matches(self, request, queryset):
@@ -111,11 +129,16 @@ class MatchAdmin(admin.ModelAdmin):
         updated = queryset.exclude(odds_adjustment=None).update(odds_adjustment=None)
         self.message_user(request, f'Cleared the odds adjustment override on {updated} match(es).')
 
+    @admin.action(description='Reset refresh mode to default (site-wide) for selected matches')
+    def reset_refresh_mode_to_default(self, request, queryset):
+        updated = queryset.exclude(refresh_mode_override=None).update(refresh_mode_override=None)
+        self.message_user(request, f'Cleared the refresh mode override on {updated} match(es).')
+
 
 @admin.register(RealtimeOddsConfig)
 class RealtimeOddsConfigAdmin(admin.ModelAdmin):
     list_display = (
-        'is_enabled', 'live_refresh_seconds', 'not_started_refresh_seconds',
+        'is_enabled', 'default_refresh_mode', 'live_refresh_seconds', 'not_started_refresh_seconds',
         'proximity_boost_seconds', 'proximity_window_minutes',
         'min_viewers_for_realtime', 'bet_acceptance_delay_seconds',
         'store_full_odds_history', 'updated_at',

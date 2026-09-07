@@ -290,15 +290,17 @@ def admin_matches_view(request):
     matches = paginator.get_page(page_number)
 
     # Cheap existence check for the "this match has an active
-    # override" alert - covers both the flat odds_adjustment cascade
-    # (Phase 4/6) and the Custom Odds pricing-mode overrides (Phase 8),
-    # computed once for just the current page rather than per row.
+    # override" alert - covers the flat odds_adjustment cascade (Phase
+    # 4/6), the Custom Odds pricing-mode overrides (Phase 8), and the
+    # per-match refresh-mode override (Phase 9), computed once for just
+    # the current page rather than per row.
     page_match_ids = [m.id for m in matches]
     overridden_match_ids = set(
         Match.objects.filter(
             pk__in=page_match_ids,
         ).exclude(
             odds_adjustment=None, lay_spread_override=None, house_max_liability_override=None,
+            refresh_mode_override=None,
         ).values_list('id', flat=True)
     ) | set(
         PricingOverride.objects.filter(match_id__in=page_match_ids).values_list('match_id', flat=True)
@@ -2130,24 +2132,45 @@ def match_odds_poll_view(request, pk):
     at most once per configured interval per sport, regardless of how many
     viewers are polling concurrently.
     """
+    from apps.sports.models import RefreshMode
     from apps.sports.realtime import (
         get_effective_refresh_interval,
         maybe_refresh_sport_odds,
         record_viewer_heartbeat,
+        resolve_effective_refresh_mode,
     )
 
     match = get_object_or_404(Match, pk=pk)
     config = RealtimeOddsConfig.get_solo()
+    effective_mode = resolve_effective_refresh_mode(match, config)
 
-    interval = get_effective_refresh_interval(match, config) if config.is_enabled else None
+    if not config.is_enabled or effective_mode in (RefreshMode.STOPPED, RefreshMode.MANUAL_ONLY):
+        # STOPPED and MANUAL_ONLY both have no timer-driven interval - the
+        # client JS's existing should_continue_polling flag naturally goes
+        # False for either, so the poll loop stops itself with no JS
+        # changes needed. MANUAL_ONLY's only path to a fresh value is the
+        # explicit ?refresh=manual branch below.
+        interval = None
+    else:
+        interval = get_effective_refresh_interval(match, config)
 
     if interval is not None:
         if not request.session.session_key:
             request.session.save()
         viewer_count = record_viewer_heartbeat(match, request.session.session_key, stale_after_seconds=interval * 3)
-        if viewer_count >= config.min_viewers_for_realtime:
+        should_refresh = effective_mode == RefreshMode.ALWAYS or viewer_count >= config.min_viewers_for_realtime
+        if should_refresh:
             maybe_refresh_sport_odds(match.sport, interval)
             match.refresh_from_db(fields=['odds_home', 'odds_draw', 'odds_away'])
+    elif config.is_enabled and effective_mode == RefreshMode.MANUAL_ONLY and request.GET.get('refresh') == 'manual':
+        # A deliberate, explicit request for one fresh fetch - still
+        # governed by maybe_refresh_sport_odds's own per-sport throttle
+        # lock, so repeated clicks can't burn API credits. STOPPED mode
+        # (and the global switch being off) never reaches this branch at
+        # all - refused outright, no exceptions, by design.
+        manual_interval = get_effective_refresh_interval(match, config) or config.live_refresh_seconds
+        maybe_refresh_sport_odds(match.sport, manual_interval)
+        match.refresh_from_db(fields=['odds_home', 'odds_draw', 'odds_away'])
 
     from apps.sports.pricing import get_effective_odds_for_user
     odds_home, odds_draw, odds_away = get_effective_odds_for_user(match, request.user)
@@ -2159,6 +2182,7 @@ def match_odds_poll_view(request, pk):
         'status': match.status,
         'should_continue_polling': interval is not None,
         'next_poll_seconds': interval or 60,
+        'manual_refresh_available': bool(config.is_enabled and effective_mode == RefreshMode.MANUAL_ONLY),
     })
 
 @login_required
