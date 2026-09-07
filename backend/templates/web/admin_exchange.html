@@ -55,6 +55,7 @@
         </select>
         <button type="submit" class="btn">Search</button>
         <a class="btn" href="{% url 'web:admin_exchange' %}">Reset</a>
+        <a class="btn" href="?export=orders_xlsx&orders_q={{ orders_q }}&orders_side={{ orders_side }}&orders_status={{ orders_status }}">Download Excel</a>
     </form>
 
     <table>
@@ -113,6 +114,7 @@
         To <input type="date" name="fills_date_to" value="{{ fills_date_to }}">
         <button type="submit" class="btn">Search</button>
         <a class="btn" href="{% url 'web:admin_exchange' %}">Reset</a>
+        <a class="btn" href="?export=fills_xlsx&fills_status={{ fills_status }}&fills_selection={{ fills_selection }}&fills_date_from={{ fills_date_from }}&fills_date_to={{ fills_date_to }}">Download Excel</a>
     </form>
 
     <table>

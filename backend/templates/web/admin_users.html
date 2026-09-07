@@ -29,6 +29,8 @@
         to <input type="datetime-local" name="date_to" value="{{ date_to }}">
         <button type="submit" class="btn">Search</button>
         <a class="btn" href="{% url 'web:admin_users' %}">Reset</a>
+        <a class="btn" href="?export=users_xlsx&q={{ query }}&filter={{ filter_by }}&sort={{ sort_by }}&date_from={{ date_from }}&date_to={{ date_to }}">Download Excel</a>
+        <a class="btn" href="?export=users_master_xlsx">Download All Users (Excel)</a>
     </form>
 
     <table>

@@ -13,6 +13,7 @@
             <input type="text" name="action" value="{{ action_filter|default:'' }}" placeholder="e.g. settle">
         </div>
         <button type="submit" class="btn">Filter</button>
+        <a class="btn" href="?export=xlsx&user_email={{ user_email|default:'' }}&action={{ action_filter|default:'' }}">Download Excel</a>
     </form>
 
     <table>

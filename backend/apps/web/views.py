@@ -501,6 +501,9 @@ def admin_exchange_dashboard_view(request):
     if orders_status:
         orders_qs = orders_qs.filter(status=orders_status)
 
+    if request.GET.get('export') == 'orders_xlsx':
+        return _export_exchange_orders_xlsx(orders_qs)
+
     orders_paginator = Paginator(orders_qs, 20)
     orders_page = orders_paginator.get_page(request.GET.get('orders_page'))
 
@@ -523,6 +526,9 @@ def admin_exchange_dashboard_view(request):
         fills_qs = fills_qs.filter(created_at__gte=fills_from_dt)
     if fills_to_dt:
         fills_qs = fills_qs.filter(created_at__lte=fills_to_dt)
+
+    if request.GET.get('export') == 'fills_xlsx':
+        return _export_exchange_fills_xlsx(fills_qs)
 
     fills_paginator = Paginator(fills_qs, 20)
     fills_page = fills_paginator.get_page(request.GET.get('fills_page'))
@@ -590,6 +596,9 @@ def admin_cashback_dashboard_view(request):
         credits_qs = credits_qs.filter(created_at__gte=credits_from_dt)
     if credits_to_dt:
         credits_qs = credits_qs.filter(created_at__lte=credits_to_dt)
+
+    if request.GET.get('export') == 'credits_xlsx':
+        return _export_cashback_credits_xlsx(credits_qs)
 
     credits_paginator = Paginator(credits_qs, 20)
     credits_page = credits_paginator.get_page(request.GET.get('credits_page'))
@@ -820,6 +829,9 @@ def admin_audit_logs_view(request):
     if action:
         logs_list = logs_list.filter(action__icontains=action)
 
+    if request.GET.get('export') == 'xlsx':
+        return _export_audit_logs_xlsx(logs_list)
+
     paginator = Paginator(logs_list, 20)
     page_number = request.GET.get('page')
     logs = paginator.get_page(page_number)
@@ -920,6 +932,16 @@ def admin_users_view(request):
         # A master only manages/sees their own direct downstream users.
         users_list = users_list.filter(parent_id=request.user.id)
 
+    if request.GET.get('export') == 'users_master_xlsx':
+        # Checked here deliberately - before any q/date_from/date_to/filter
+        # narrowing below - so "master export" means "every user this admin
+        # is allowed to manage," not literally every row regardless of who's
+        # asking. Reusing the already-scoped users_list preserves the same
+        # Master-vs-full-admin access boundary enforced above; bypassing it
+        # here would reopen the class of privilege-escalation bug already
+        # fixed once in this project.
+        return _export_users_xlsx(users_list, 'all_users.xlsx')
+
     query = request.GET.get('q', '').strip()
     if query:
         users_list = users_list.filter(email__icontains=query)
@@ -962,6 +984,9 @@ def admin_users_view(request):
         'withdraw_all_time': '-withdraw_all_time',
     }
     users_list = users_list.order_by(sort_map.get(sort_by, '-date_joined'), 'id')
+
+    if request.GET.get('export') == 'users_xlsx':
+        return _export_users_xlsx(users_list, 'users_filtered.xlsx')
 
     if active_ids is None and filter_by != 'online':
         # Only compute this once, and only when needed for display (the
@@ -1188,6 +1213,8 @@ def admin_user_ledger_view(request, user_id):
 
     if request.GET.get('export') == 'bets_csv':
         return _export_bets_csv(target, bets_qs)
+    if request.GET.get('export') == 'bets_xlsx':
+        return _export_bets_xlsx(target, bets_qs)
 
     bet_page_size = _clamp_page_size(request.GET.get('bet_page_size'), default=50)
     bet_paginator = Paginator(bets_qs, bet_page_size)
@@ -1212,6 +1239,8 @@ def admin_user_ledger_view(request, user_id):
 
     if request.GET.get('export') == 'payments_csv':
         return _export_payments_csv(target, payments_qs)
+    if request.GET.get('export') == 'payments_xlsx':
+        return _export_payments_xlsx(target, payments_qs)
 
     pay_page_size = _clamp_page_size(request.GET.get('pay_page_size'), default=50)
     pay_paginator = Paginator(payments_qs, pay_page_size)
@@ -1286,6 +1315,198 @@ def _export_payments_csv(target, payments_qs):
             p.external_id,
         ])
     return response
+
+
+def _build_xlsx_response(filename, headers, rows):
+    """
+    Shared .xlsx writer used by every _export_*_xlsx function below - one
+    Workbook, a bold header row, one row per item. Money fields must be
+    passed in already as `str(decimal_value)` (never float) to avoid
+    floating-point misrepresentation, and datetimes as pre-formatted
+    strings (openpyxl rejects timezone-aware datetime cells outright) -
+    both conventions match what the existing CSV exports already do.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from django.http import HttpResponse
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in rows:
+        ws.append(row)
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
+def _export_bets_xlsx(target, bets_qs):
+    headers = ['Date', 'Match', 'Selection', 'Odds', 'Stake', 'Potential Payout', 'Status']
+    rows = (
+        [
+            bet.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            f'{bet.match.home_team} v {bet.match.away_team}',
+            bet.selection,
+            str(bet.odds),
+            str(bet.stake),
+            str(bet.potential_payout),
+            bet.status,
+        ]
+        for bet in bets_qs.iterator()
+    )
+    return _build_xlsx_response(f'{target.email}_bets.xlsx', headers, rows)
+
+
+def _export_payments_xlsx(target, payments_qs):
+    headers = ['Date', 'Type', 'Amount', 'Currency', 'Status', 'Provider', 'Address', 'External ID']
+    rows = (
+        [
+            p.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            p.payment_type,
+            str(p.amount),
+            p.currency,
+            p.status,
+            p.provider,
+            p.address,
+            p.external_id,
+        ]
+        for p in payments_qs.iterator()
+    )
+    return _build_xlsx_response(f'{target.email}_payments.xlsx', headers, rows)
+
+
+def _export_users_xlsx(users_qs, filename):
+    """
+    Shared by both the Manage Users "current filter" export and the master
+    "all users" export - same columns either way, only the queryset and
+    filename passed in differ. Never includes `password` (the hash) or any
+    token field. Relies on the same annotations admin_users_view already
+    puts on `users_qs` (won_count, deposit_today, etc.).
+    """
+    headers = [
+        'Email', 'Phone', 'Role', 'Parent', 'Commission Rate', 'Min Bet', 'Max Bet',
+        'Betting Enabled', 'Cashback Enabled Override', 'Cashback Rate Override',
+        'Cashback Wagering Multiplier Override', 'Date Joined', 'Active', 'Staff',
+        'Last Login', 'Won', 'Lost', 'Pending', 'Deposited Today', 'Withdrawn Today',
+        'Deposited All-Time', 'Withdrawn All-Time',
+    ]
+
+    def _fmt_dt(value):
+        return value.strftime('%Y-%m-%d %H:%M:%S') if value else ''
+
+    def _fmt_decimal(value):
+        return str(value) if value is not None else ''
+
+    rows = (
+        [
+            u.email,
+            u.phone_number,
+            u.role,
+            u.parent.email if u.parent_id else '',
+            _fmt_decimal(u.commission_rate),
+            _fmt_decimal(u.min_bet_amount),
+            _fmt_decimal(u.max_bet_amount),
+            u.is_betting_enabled,
+            u.cashback_enabled_override if u.cashback_enabled_override is not None else '',
+            _fmt_decimal(u.cashback_rate_override),
+            _fmt_decimal(u.cashback_wagering_multiplier_override),
+            _fmt_dt(u.date_joined),
+            u.is_active,
+            u.is_staff,
+            _fmt_dt(u.last_login),
+            u.won_count,
+            u.lost_count,
+            u.pending_count,
+            _fmt_decimal(u.deposit_today),
+            _fmt_decimal(u.withdraw_today),
+            _fmt_decimal(u.deposit_all_time),
+            _fmt_decimal(u.withdraw_all_time),
+        ]
+        for u in users_qs.iterator()
+    )
+    return _build_xlsx_response(filename, headers, rows)
+
+
+def _export_exchange_orders_xlsx(orders_qs):
+    headers = ['User', 'Match', 'Selection', 'Side', 'Odds', 'Stake', 'Matched', 'Unmatched', 'Status', 'Date']
+    rows = (
+        [
+            order.user.email,
+            f'{order.match.home_team} v {order.match.away_team}',
+            order.selection,
+            order.side,
+            str(order.odds),
+            str(order.stake),
+            str(order.matched_stake),
+            str(order.unmatched_stake),
+            order.status,
+            order.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        ]
+        for order in orders_qs.iterator()
+    )
+    return _build_xlsx_response('exchange_orders.xlsx', headers, rows)
+
+
+def _export_exchange_fills_xlsx(fills_qs):
+    headers = ['Match', 'Selection', 'Back User', 'Lay User', 'Odds', 'Stake', 'Status', 'Commission', 'Date']
+    rows = (
+        [
+            f'{fill.match.home_team} v {fill.match.away_team}',
+            fill.selection,
+            fill.back_order.user.email,
+            fill.lay_order.user.email,
+            str(fill.odds),
+            str(fill.stake),
+            fill.status,
+            str(fill.commission_amount) if fill.commission_amount is not None else '',
+            fill.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        ]
+        for fill in fills_qs.iterator()
+    )
+    return _build_xlsx_response('exchange_fills.xlsx', headers, rows)
+
+
+def _export_cashback_credits_xlsx(credits_qs):
+    headers = ['User', 'Source', 'Loss', 'Rate', 'Cashback', 'Multiplier', 'Wagered', 'Required', 'Status', 'Date']
+    rows = (
+        [
+            credit.user.email,
+            credit.source_description,
+            str(credit.loss_amount),
+            str(credit.rate_applied),
+            str(credit.cashback_amount),
+            str(credit.multiplier_applied),
+            str(credit.wagering_progress),
+            str(credit.wagering_required),
+            credit.status,
+            credit.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        ]
+        for credit in credits_qs.iterator()
+    )
+    return _build_xlsx_response('cashback_credits.xlsx', headers, rows)
+
+
+def _export_audit_logs_xlsx(logs_qs):
+    headers = ['User', 'Action', 'Target Type', 'Target ID', 'Metadata', 'IP', 'Date']
+    rows = (
+        [
+            log.user.email if log.user_id else 'System',
+            log.action,
+            log.target_type or '',
+            log.target_id or '',
+            str(log.metadata) if log.metadata else '',
+            log.ip_address or '',
+            log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        ]
+        for log in logs_qs.iterator()
+    )
+    return _build_xlsx_response('audit_logs.xlsx', headers, rows)
 
 
 def admin_bet_detail_view(request, bet_id):

@@ -45,6 +45,7 @@
         To <input type="date" name="credits_date_to" value="{{ credits_date_to }}">
         <button type="submit" class="btn">Search</button>
         <a class="btn" href="{% url 'web:admin_cashback' %}">Reset</a>
+        <a class="btn" href="?export=credits_xlsx&credits_q={{ credits_q }}&credits_status={{ credits_status }}&credits_date_from={{ credits_date_from }}&credits_date_to={{ credits_date_to }}">Download Excel</a>
     </form>
 
     <table>
