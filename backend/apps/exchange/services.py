@@ -8,7 +8,7 @@ from rest_framework.exceptions import ValidationError
 from apps.bets.models import Bet
 from apps.cashback.services import credit_cashback_for_loss, record_wager
 from apps.sports.models import HouseLiquidityConfig, Match
-from apps.sports.pricing import compute_lay_price, resolve_effective_lay_spread
+from apps.sports.pricing import compute_back_and_lay, resolve_effective_lay_spread, resolve_match_pricing_mode
 from apps.wallet.models import Wallet, WalletTransaction
 
 from .models import ExchangeConfig, ExchangeFill, ExchangeOrder
@@ -629,12 +629,20 @@ def sync_house_orders_for_match(match: Match) -> None:
     match - no draw order can ever be created for one by construction),
     cancels the house's stale UNMATCHED resting order on EACH side there
     if one exists (already-matched fills are historical and are never
-    touched), then places one fresh house order per side:
-      - BACK at the match's own real back odds, unmodified - "back" here
-        is always the genuine Pinnacle/ParlayAPI price, identical to what
-        the sportsbook itself shows, so there is never a back-vs-back
+    touched), then places one fresh house order per side, priced via
+    resolve_match_pricing_mode()/compute_back_and_lay():
+      - BACK is the match's own real back odds, unmodified, UNLESS a
+        "Custom Odds" pricing override for this match (or the site-wide
+        default) has frozen it to an admin-set value instead - either
+        way, this is always the exact same number the sportsbook itself
+        shows for this match, so there is never a back-vs-back
         discrepancy between apps.bets and apps.exchange to arbitrage.
-      - LAY at compute_lay_price() (back + spread), unchanged from before.
+      - LAY is computed per whichever of the three lay modes is active
+        (API Lay = back + house spread, unchanged from before; Relative
+        Lay = back + a separately configured delta; Custom Lay = a fully
+        independent fixed value) - compute_back_and_lay() applies a
+        universal floor-clamp on top so lay can never equal or drop below
+        back regardless of which mode produced it.
 
     The configured liability cap is SHARED between the two fresh orders -
     split 50/50 - rather than given in full to each independently. This is
@@ -689,11 +697,18 @@ def sync_house_orders_for_match(match: Match) -> None:
         Bet.Selection.AWAY: match.odds_away,
     }
 
+    pricing_mode = resolve_match_pricing_mode(match)
+
     for selection in selections:
-        back_odds = back_odds_by_selection[selection]
-        if back_odds is None:
+        raw_back_odds = back_odds_by_selection[selection]
+        if raw_back_odds is None:
             continue
-        lay_price = compute_lay_price(back_odds, effective_spread)
+        # back/lay here may reflect an active Custom Odds override
+        # (frozen back, and/or a Relative/Custom lay independent of
+        # effective_spread) - compute_back_and_lay() is the one place
+        # that resolves all three lay modes and applies the universal
+        # arbitrage-safety floor, regardless of which mode is active.
+        back_odds, lay_price = compute_back_and_lay(raw_back_odds, pricing_mode, effective_spread, selection)
 
         with transaction.atomic():
             stale_orders = ExchangeOrder.objects.select_for_update().filter(

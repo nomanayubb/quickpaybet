@@ -6,9 +6,12 @@
     <p><strong>Start:</strong> {{ match.start_time }}</p>
     <p><strong>Status:</strong> {{ match.status }}</p>
     <p><strong>Odds:</strong><br>
-        Home: <span id="odds-home">{{ display_odds_home|default:"-" }}</span><br>
-        Draw: <span id="odds-draw">{{ display_odds_draw|default:"-" }}</span><br>
+        Home: <span id="odds-home">{{ display_odds_home|default:"-" }}</span>
+        <span style="color:#888;font-size:12px;">(lay ref. {{ display_lay_home|default:"-" }})</span><br>
+        Draw: <span id="odds-draw">{{ display_odds_draw|default:"-" }}</span>
+        {% if display_odds_draw %}<span style="color:#888;font-size:12px;">(lay ref. {{ display_lay_draw|default:"-" }})</span>{% endif %}<br>
         Away: <span id="odds-away">{{ display_odds_away|default:"-" }}</span>
+        <span style="color:#888;font-size:12px;">(lay ref. {{ display_lay_away|default:"-" }})</span>
     </p>
 
     {% if match.status == 'live' or match.status == 'scheduled' %}

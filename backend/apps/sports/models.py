@@ -230,6 +230,17 @@ class OddsAdjustmentConfig(models.Model):
         return obj
 
 
+class BackMode(models.TextChoices):
+    API = 'api', 'API (genuine Pinnacle price)'
+    CUSTOM = 'custom', 'Custom (frozen admin value)'
+
+
+class LayMode(models.TextChoices):
+    API_LAY = 'api_lay', 'API Lay (back + house spread)'
+    RELATIVE = 'relative', 'Relative Lay (back + custom delta)'
+    CUSTOM = 'custom', 'Custom Lay (independent fixed value)'
+
+
 class HouseLiquidityConfig(models.Model):
     """
     Singleton settings row (same get_solo()/pk=1 pattern as
@@ -248,6 +259,13 @@ class HouseLiquidityConfig(models.Model):
     apps.sports.pricing.compute_lay_price for the actual, unconditional
     code-level enforcement of this - these validators are a second,
     belt-and-braces layer, never the sole protection).
+
+    The default_back_mode/default_lay_mode fields (and their associated
+    custom/relative values) are this same "safe until opted in" global
+    scope for the Custom Odds system (apps.sports.pricing.
+    resolve_match_pricing_mode/compute_back_and_lay) - defaulting to plain
+    API back + API lay, i.e. today's existing behaviour, until an admin
+    deliberately switches a scope to something else.
     """
     is_enabled = models.BooleanField(
         default=False,
@@ -266,6 +284,49 @@ class HouseLiquidityConfig(models.Model):
         default=Decimal('1000.00'),
         validators=[MinValueValidator(Decimal('0.00'))],
         verbose_name='Default max house liability (currency units) per match+selection',
+    )
+    default_back_mode = models.CharField(
+        max_length=10, choices=BackMode.choices, default=BackMode.API,
+        verbose_name='Default back price mode (global)',
+    )
+    default_back_custom_value_home = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Default custom back value, Home (used when default_back_mode = custom)',
+    )
+    default_back_custom_value_draw = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Default custom back value, Draw (used when default_back_mode = custom)',
+    )
+    default_back_custom_value_away = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Default custom back value, Away (used when default_back_mode = custom)',
+    )
+    default_lay_mode = models.CharField(
+        max_length=10, choices=LayMode.choices, default=LayMode.API_LAY,
+        verbose_name='Default lay price mode (global)',
+    )
+    default_lay_relative_delta = models.DecimalField(
+        max_digits=4, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name='Default relative lay delta (used when default_lay_mode = relative; same delta applied to each selection\'s own back)',
+    )
+    default_lay_custom_value_home = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Default custom lay value, Home (used when default_lay_mode = custom)',
+    )
+    default_lay_custom_value_draw = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Default custom lay value, Draw (used when default_lay_mode = custom)',
+    )
+    default_lay_custom_value_away = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Default custom lay value, Away (used when default_lay_mode = custom)',
     )
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -355,3 +416,122 @@ class UserMatchOddsOverride(models.Model):
 
     def __str__(self):
         return f'{self.user} @ {self.match}: {self.adjustment:+}'
+
+
+class PricingOverride(models.Model):
+    """
+    "Custom Odds" - one unified table covering the 3 non-global scopes of
+    the back/lay pricing-mode system (the global scope's own fields live
+    on HouseLiquidityConfig, above): a match-only row (user is None)
+    feeds the real, shared exchange order book (see
+    apps.exchange.services.sync_house_orders_for_match); a user-only or
+    user+match row can ONLY ever change what that one specific person
+    sees/is charged on the simple sportsbook bet (apps.bets) - the
+    exchange's order book is one shared, matched market, so a per-user
+    override can never apply there (see
+    apps.sports.pricing.resolve_user_pricing_mode).
+
+    One table for all 3 scopes, rather than 3 separate models, so there
+    is exactly one place to search/list/reset every active override -
+    directly what the client asked for ("one new tab which manages these
+    all... so we don't get mixed up").
+
+    Uniqueness across the 3 scope kinds a single (user, match) pair with
+    NULLs can represent: the plain unique_together covers the user+match-
+    specific kind (neither is null); the two conditional UniqueConstraints
+    below separately cap the match-only and user-only kinds at one row
+    each (NULL != NULL in SQL, so a bare unique_together cannot do this on
+    its own).
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='pricing_overrides',
+        null=True,
+        blank=True,
+        verbose_name='User (blank = applies to all users)',
+    )
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name='pricing_overrides',
+        null=True,
+        blank=True,
+        verbose_name='Match (blank = applies to all matches)',
+    )
+    back_mode = models.CharField(max_length=10, choices=BackMode.choices, default=BackMode.API)
+    back_custom_value_home = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Custom back value, Home (used when back_mode = custom)',
+    )
+    back_custom_value_draw = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Custom back value, Draw (used when back_mode = custom)',
+    )
+    back_custom_value_away = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Custom back value, Away (used when back_mode = custom)',
+    )
+    lay_mode = models.CharField(max_length=10, choices=LayMode.choices, default=LayMode.API_LAY)
+    lay_relative_delta = models.DecimalField(
+        max_digits=4, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('-10.00')), MaxValueValidator(Decimal('10.00'))],
+        verbose_name='Relative lay delta (used when lay_mode = relative; same delta applied to each selection\'s own back)',
+    )
+    lay_custom_value_home = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Custom lay value, Home (used when lay_mode = custom)',
+    )
+    lay_custom_value_draw = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Custom lay value, Draw (used when lay_mode = custom)',
+    )
+    lay_custom_value_away = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('1.01'))],
+        verbose_name='Custom lay value, Away (used when lay_mode = custom)',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'match')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['match'], condition=models.Q(user__isnull=True),
+                name='at_most_one_match_only_pricing_override',
+            ),
+            models.UniqueConstraint(
+                fields=['user'], condition=models.Q(match__isnull=True),
+                name='at_most_one_user_only_pricing_override',
+            ),
+        ]
+        verbose_name = 'Pricing Override (Custom Odds)'
+        verbose_name_plural = 'Pricing Overrides (Custom Odds)'
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.user_id is None and self.match_id is None:
+            # The fully-global scope lives on HouseLiquidityConfig instead -
+            # a bare unique_together can't cap "both null" rows at one
+            # (NULL != NULL in SQL), so this is enforced here.
+            raise ValidationError('A pricing override must specify a user, a match, or both - use House Liquidity Config for the global default.')
+
+    def __str__(self):
+        scope = f'{self.user or "all users"} / {self.match or "all matches"}'
+        return f'{scope}: back={self.back_mode}, lay={self.lay_mode}'
+
+    @property
+    def scope_label(self) -> str:
+        if self.user_id and self.match_id:
+            return 'User + Match'
+        if self.user_id:
+            return 'User (all matches)'
+        if self.match_id:
+            return 'Match (all users)'
+        return 'Global'

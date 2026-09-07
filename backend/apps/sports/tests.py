@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -13,15 +15,20 @@ from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
 from .models import (
-    Match, OddsAdjustmentConfig, OddsHistoryEntry, RealtimeOddsConfig, Sport, UserMatchOddsOverride,
+    BackMode, HouseLiquidityConfig, LayMode, Match, OddsAdjustmentConfig, OddsHistoryEntry,
+    PricingOverride, RealtimeOddsConfig, Sport, UserMatchOddsOverride,
 )
 from .pricing import (
     apply_odds_adjustment,
+    compute_back_and_lay,
     compute_lay_price,
+    get_effective_lay_reference_for_user,
     get_effective_odds_for_user,
     resolve_effective_adjustment,
     resolve_effective_lay_spread,
+    resolve_match_pricing_mode,
     resolve_user_extra_adjustment,
+    resolve_user_pricing_mode,
 )
 from .providers import (
     BaseOddsProvider,
@@ -666,3 +673,190 @@ class OddsAdjustmentAdminResetActionTests(TestCase):
         admin_instance.reset_to_default(self._admin_request(), OddsAdjustmentConfig.objects.filter(pk=self.config.pk))
         self.config.refresh_from_db()
         self.assertEqual(self.config.default_adjustment, Decimal('0'))
+
+
+class PricingOverrideModelTests(TestCase):
+    def setUp(self):
+        self.sport = Sport.objects.create(name='PricingOverrideSport', slug='pricing-override-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.user = User.objects.create_user(email='pricingoverride@example.com', password='testpass123')
+
+    def test_both_null_rejected_by_clean(self):
+        override = PricingOverride(back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.00'))
+        with self.assertRaises(ValidationError):
+            override.full_clean()
+
+    def test_match_only_row_is_capped_at_one(self):
+        PricingOverride.objects.create(match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.00'))
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                PricingOverride.objects.create(match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('4.00'))
+
+    def test_user_only_row_is_capped_at_one(self):
+        PricingOverride.objects.create(user=self.user, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.00'))
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                PricingOverride.objects.create(user=self.user, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('4.00'))
+
+    def test_user_and_match_can_each_have_their_own_row_simultaneously(self):
+        # Confirms the two conditional constraints don't collide with
+        # each other - a match-only row and a user-only row can coexist.
+        PricingOverride.objects.create(match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.00'))
+        PricingOverride.objects.create(user=self.user, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('5.00'))
+        self.assertEqual(PricingOverride.objects.count(), 2)
+
+
+class PricingModeResolutionTests(TestCase):
+    def setUp(self):
+        HouseLiquidityConfig.objects.filter(pk=1).delete()
+        self.config = HouseLiquidityConfig.objects.create(pk=1, default_lay_spread=Decimal('0.10'))
+
+        self.sport = Sport.objects.create(name='PricingModeSport', slug='pricing-mode-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.user = User.objects.create_user(email='pricingmode@example.com', password='testpass123')
+
+    def test_resolve_match_pricing_mode_falls_back_to_global_default(self):
+        mode = resolve_match_pricing_mode(self.match)
+        self.assertEqual(mode.back_mode, BackMode.API)
+        self.assertEqual(mode.lay_mode, LayMode.API_LAY)
+
+    def test_resolve_match_pricing_mode_prefers_match_row(self):
+        PricingOverride.objects.create(
+            match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.15'),
+        )
+        mode = resolve_match_pricing_mode(self.match)
+        self.assertEqual(mode.back_mode, BackMode.CUSTOM)
+        self.assertEqual(mode.back_custom_value_home, Decimal('3.15'))
+
+    def test_resolve_user_pricing_mode_none_when_no_override(self):
+        self.assertIsNone(resolve_user_pricing_mode(self.user, self.match))
+
+    def test_resolve_user_pricing_mode_prefers_user_match_specific_over_user_only(self):
+        PricingOverride.objects.create(user=self.user, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('9.00'))
+        PricingOverride.objects.create(
+            user=self.user, match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('1.50'),
+        )
+        mode = resolve_user_pricing_mode(self.user, self.match)
+        self.assertEqual(mode.back_custom_value_home, Decimal('1.50'))
+
+    def test_resolve_user_pricing_mode_none_for_anonymous(self):
+        self.assertIsNone(resolve_user_pricing_mode(AnonymousUser(), self.match))
+
+    def _mode(self, **overrides):
+        from .pricing import ResolvedPricingMode
+        defaults = dict(
+            back_mode=BackMode.API,
+            back_custom_value_home=None, back_custom_value_draw=None, back_custom_value_away=None,
+            lay_mode=LayMode.API_LAY, lay_relative_delta=None,
+            lay_custom_value_home=None, lay_custom_value_draw=None, lay_custom_value_away=None,
+        )
+        defaults.update(overrides)
+        return ResolvedPricingMode(**defaults)
+
+    def test_compute_back_and_lay_custom_back_api_lay(self):
+        mode = self._mode(back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.15'))
+        back, lay = compute_back_and_lay(Decimal('2.00'), mode, Decimal('0.10'), 'home')
+        self.assertEqual(back, Decimal('3.15'))
+        self.assertEqual(lay, Decimal('3.25'))  # custom back (3.15) + house spread (0.10)
+
+    def test_compute_back_and_lay_custom_back_is_per_selection(self):
+        mode = self._mode(
+            back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.15'),
+            back_custom_value_draw=Decimal('5.00'), back_custom_value_away=Decimal('7.00'),
+        )
+        back_home, _ = compute_back_and_lay(Decimal('2.00'), mode, Decimal('0.10'), 'home')
+        back_draw, _ = compute_back_and_lay(Decimal('3.00'), mode, Decimal('0.10'), 'draw')
+        back_away, _ = compute_back_and_lay(Decimal('4.00'), mode, Decimal('0.10'), 'away')
+        # Each selection gets its OWN custom value - the real bug caught
+        # live before this redesign was all three showing the same number.
+        self.assertEqual(back_home, Decimal('3.15'))
+        self.assertEqual(back_draw, Decimal('5.00'))
+        self.assertEqual(back_away, Decimal('7.00'))
+
+    def test_compute_back_and_lay_relative_lay_positive(self):
+        mode = self._mode(lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('0.30'))
+        back, lay = compute_back_and_lay(Decimal('2.20'), mode, Decimal('0.10'), 'home')
+        self.assertEqual(back, Decimal('2.20'))
+        self.assertEqual(lay, Decimal('2.50'))
+
+    def test_compute_back_and_lay_relative_lay_negative_still_floor_clamped(self):
+        # The client's own example: back=3.00, relative delta=-0.60 would
+        # naively give lay=2.40 - fine there since it's still > back? No -
+        # 2.40 < 3.00, which IS the arbitrage condition. The universal
+        # floor-clamp must catch this regardless of what the admin enters.
+        mode = self._mode(lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('-0.60'))
+        back, lay = compute_back_and_lay(Decimal('3.00'), mode, Decimal('0.10'), 'home')
+        self.assertEqual(back, Decimal('3.00'))
+        self.assertGreater(lay, back)
+        self.assertEqual(lay, Decimal('3.01'))  # floor-clamped to back + LAY_SPREAD_FLOOR
+
+    def test_compute_back_and_lay_custom_lay_below_back_is_floor_clamped(self):
+        mode = self._mode(lay_mode=LayMode.CUSTOM, lay_custom_value_home=Decimal('1.50'))
+        back, lay = compute_back_and_lay(Decimal('4.00'), mode, Decimal('0.10'), 'home')
+        self.assertEqual(back, Decimal('4.00'))
+        self.assertEqual(lay, Decimal('4.01'))  # 1.50 would be below back - clamped
+
+    def test_compute_back_and_lay_custom_lay_above_back_used_as_is(self):
+        mode = self._mode(lay_mode=LayMode.CUSTOM, lay_custom_value_home=Decimal('5.00'))
+        back, lay = compute_back_and_lay(Decimal('4.00'), mode, Decimal('0.10'), 'home')
+        self.assertEqual(lay, Decimal('5.00'))  # already above back - no clamping needed
+
+    def test_compute_back_and_lay_custom_lay_is_per_selection(self):
+        mode = self._mode(
+            lay_mode=LayMode.CUSTOM, lay_custom_value_home=Decimal('5.00'),
+            lay_custom_value_draw=Decimal('6.00'), lay_custom_value_away=Decimal('7.00'),
+        )
+        _, lay_home = compute_back_and_lay(Decimal('2.00'), mode, Decimal('0.10'), 'home')
+        _, lay_draw = compute_back_and_lay(Decimal('3.00'), mode, Decimal('0.10'), 'draw')
+        _, lay_away = compute_back_and_lay(Decimal('4.00'), mode, Decimal('0.10'), 'away')
+        self.assertEqual((lay_home, lay_draw, lay_away), (Decimal('5.00'), Decimal('6.00'), Decimal('7.00')))
+
+    def test_compute_back_and_lay_none_back_passes_through(self):
+        mode = self._mode()
+        self.assertEqual(compute_back_and_lay(None, mode, Decimal('0.10'), 'home'), (None, None))
+
+    def test_get_effective_odds_for_user_uses_users_own_custom_back_override_per_selection(self):
+        PricingOverride.objects.create(
+            user=self.user, match=self.match, back_mode=BackMode.CUSTOM,
+            back_custom_value_home=Decimal('1.50'), back_custom_value_draw=Decimal('2.50'),
+            back_custom_value_away=Decimal('3.50'),
+        )
+        odds_home, odds_draw, odds_away = get_effective_odds_for_user(self.match, self.user)
+        self.assertEqual(odds_home, Decimal('1.50'))
+        self.assertEqual(odds_draw, Decimal('2.50'))
+        self.assertEqual(odds_away, Decimal('3.50'))
+
+    def test_get_effective_odds_for_user_unaffected_when_no_user_override(self):
+        PricingOverride.objects.create(match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('9.99'))
+        # A match-level override must NEVER leak into the per-user
+        # sportsbook resolution used for bet-charging - only a user-level
+        # (or user+match) row can do that. This proves the two-stage split
+        # (match/global feeds the shared price; user/user-match is a
+        # display/charge override layered on top of THAT, and only ever
+        # triggered by the presence of a user-scoped row) holds.
+        odds_home, _, _ = get_effective_odds_for_user(self.match, self.user)
+        self.assertEqual(odds_home, self.match.odds_home)
+
+    def test_get_effective_lay_reference_for_user_matches_users_mode(self):
+        PricingOverride.objects.create(
+            user=self.user, match=self.match, back_mode=BackMode.API,
+            lay_mode=LayMode.CUSTOM, lay_custom_value_home=Decimal('9.00'),
+            lay_custom_value_draw=Decimal('9.50'), lay_custom_value_away=Decimal('10.00'),
+        )
+        lay_home, lay_draw, lay_away = get_effective_lay_reference_for_user(self.match, self.user)
+        self.assertEqual(lay_home, Decimal('9.00'))
+        self.assertEqual(lay_draw, Decimal('9.50'))
+        self.assertEqual(lay_away, Decimal('10.00'))
+
+    def test_get_effective_lay_reference_for_user_falls_back_to_match_mode(self):
+        PricingOverride.objects.create(match=self.match, lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('0.40'))
+        lay_home, _, _ = get_effective_lay_reference_for_user(self.match, self.user)
+        self.assertEqual(lay_home, Decimal('2.40'))  # 2.00 + 0.40, no user override present

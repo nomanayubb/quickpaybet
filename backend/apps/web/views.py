@@ -30,7 +30,9 @@ from apps.exchange.services import place_order as place_exchange_order, cancel_o
 from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.cashback.models import CashbackCredit
 from apps.rewards.models import RewardPackage, UserRewardClaim
-from apps.sports.models import Match, Sport, Tournament, RealtimeOddsConfig
+from apps.sports.models import (
+    BackMode, HouseLiquidityConfig, LayMode, Match, PricingOverride, RealtimeOddsConfig, Sport, Tournament,
+)
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
 from apps.payments.models import CryptoPayment
@@ -287,12 +289,28 @@ def admin_matches_view(request):
     page_number = request.GET.get('page')
     matches = paginator.get_page(page_number)
 
+    # Cheap existence check for the "this match has an active
+    # override" alert - covers both the flat odds_adjustment cascade
+    # (Phase 4/6) and the Custom Odds pricing-mode overrides (Phase 8),
+    # computed once for just the current page rather than per row.
+    page_match_ids = [m.id for m in matches]
+    overridden_match_ids = set(
+        Match.objects.filter(
+            pk__in=page_match_ids,
+        ).exclude(
+            odds_adjustment=None, lay_spread_override=None, house_max_liability_override=None,
+        ).values_list('id', flat=True)
+    ) | set(
+        PricingOverride.objects.filter(match_id__in=page_match_ids).values_list('match_id', flat=True)
+    )
+
     return render(
         request,
         'web/admin_matches.html',
         {
             'matches': matches,
             'page_obj': matches,
+            'overridden_match_ids': overridden_match_ids,
             'active': 'admin_matches',
         },
     )
@@ -620,6 +638,92 @@ def admin_cashback_dashboard_view(request):
             'credits_date_to': credits_date_to,
             'credit_status_choices': CashbackCredit.Status.choices,
             'active': 'admin_cashback',
+        },
+    )
+
+
+def admin_pricing_overrides_view(request):
+    """
+    "Custom Odds" dashboard - one place to search, create, and reset every
+    active back/lay pricing override at all 3 non-global scopes (match-
+    only, user-only, user+match), plus a summary of the global default
+    (edited here via a reset-to-API shortcut; the full set of global
+    fields is on HouseLiquidityConfig in Django admin). A PricingOverride
+    row existing at all IS the alert this page surfaces - matches the
+    same "existence is the flag" convention already used for
+    UserMatchOddsOverride (Phase 7).
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    config = HouseLiquidityConfig.get_solo()
+    error = None
+
+    if request.method == 'POST':
+        action = request.POST.get('action', '').strip()
+        try:
+            if action == 'reset_global':
+                config.default_back_mode = BackMode.API
+                config.default_back_custom_value_home = None
+                config.default_back_custom_value_draw = None
+                config.default_back_custom_value_away = None
+                config.default_lay_mode = LayMode.API_LAY
+                config.default_lay_relative_delta = None
+                config.default_lay_custom_value_home = None
+                config.default_lay_custom_value_draw = None
+                config.default_lay_custom_value_away = None
+                config.save()
+            elif action == 'delete':
+                override_id = request.POST.get('override_id')
+                PricingOverride.objects.filter(pk=override_id).delete()
+            elif action == 'save':
+                user_id = request.POST.get('user_id', '').strip()
+                match_id = request.POST.get('match_id', '').strip()
+                if not user_id and not match_id:
+                    raise ValidationError('Select a user, a match, or both.')
+
+                override, _ = PricingOverride.objects.get_or_create(
+                    user_id=user_id or None, match_id=match_id or None,
+                )
+                override.back_mode = request.POST.get('back_mode', BackMode.API)
+                override.back_custom_value_home = request.POST.get('back_custom_value_home') or None
+                override.back_custom_value_draw = request.POST.get('back_custom_value_draw') or None
+                override.back_custom_value_away = request.POST.get('back_custom_value_away') or None
+                override.lay_mode = request.POST.get('lay_mode', LayMode.API_LAY)
+                override.lay_relative_delta = request.POST.get('lay_relative_delta') or None
+                override.lay_custom_value_home = request.POST.get('lay_custom_value_home') or None
+                override.lay_custom_value_draw = request.POST.get('lay_custom_value_draw') or None
+                override.lay_custom_value_away = request.POST.get('lay_custom_value_away') or None
+                override.full_clean()
+                override.save()
+            return redirect('web:admin_pricing_overrides')
+        except (ValidationError, ValueError, InvalidOperation, IntegrityError) as exc:
+            error = _error_message(exc)
+
+    query = request.GET.get('q', '').strip()
+    overrides_qs = PricingOverride.objects.select_related('user', 'match').order_by('-updated_at')
+    if query:
+        from django.db.models import Q
+        overrides_qs = overrides_qs.filter(
+            Q(user__email__icontains=query) | Q(match__home_team__icontains=query) | Q(match__away_team__icontains=query)
+        )
+
+    paginator = Paginator(overrides_qs, 25)
+    overrides_page = paginator.get_page(request.GET.get('page'))
+
+    return render(
+        request,
+        'web/admin_pricing_overrides.html',
+        {
+            'config': config,
+            'overrides_page': overrides_page,
+            'query': query,
+            'error': error,
+            'back_mode_choices': BackMode.choices,
+            'lay_mode_choices': LayMode.choices,
+            'all_users': User.objects.order_by('email').only('id', 'email'),
+            'all_matches': Match.objects.order_by('-start_time').select_related('sport')[:200],
+            'active': 'admin_pricing_overrides',
         },
     )
 
@@ -1003,6 +1107,16 @@ def admin_users_view(request):
     page_number = request.GET.get('page')
     users = paginator.get_page(page_number)
 
+    # Same "existence is the alert" flag as Manage Matches, covering both
+    # the flat per-user odds-adjustment override (Phase 7) and the Custom
+    # Odds pricing-mode overrides (Phase 8), for just the current page.
+    page_user_ids = [u.id for u in users]
+    overridden_user_ids = set(
+        User.objects.filter(pk__in=page_user_ids).exclude(odds_adjustment_override=None).values_list('id', flat=True)
+    ) | set(
+        PricingOverride.objects.filter(user_id__in=page_user_ids).values_list('user_id', flat=True)
+    )
+
     return render(
         request,
         'web/admin_users.html',
@@ -1015,6 +1129,7 @@ def admin_users_view(request):
             'date_to': date_to,
             'filter_by': filter_by,
             'sort_by': sort_by,
+            'overridden_user_ids': overridden_user_ids,
             'active': 'admin_users',
         },
     )
@@ -1976,8 +2091,9 @@ def match_detail_view(request, pk):
 
     realtime_config = RealtimeOddsConfig.get_solo()
 
-    from apps.sports.pricing import get_effective_odds_for_user
+    from apps.sports.pricing import get_effective_lay_reference_for_user, get_effective_odds_for_user
     display_odds_home, display_odds_draw, display_odds_away = get_effective_odds_for_user(match, request.user)
+    display_lay_home, display_lay_draw, display_lay_away = get_effective_lay_reference_for_user(match, request.user)
 
     return render(
         request,
@@ -1987,6 +2103,9 @@ def match_detail_view(request, pk):
             'display_odds_home': display_odds_home,
             'display_odds_draw': display_odds_draw,
             'display_odds_away': display_odds_away,
+            'display_lay_home': display_lay_home,
+            'display_lay_draw': display_lay_draw,
+            'display_lay_away': display_lay_away,
             'error': place_error,
             'order_book': get_order_book(match) if match.status in (Match.Status.SCHEDULED, Match.Status.LIVE) else None,
             'my_exchange_orders': my_exchange_orders,

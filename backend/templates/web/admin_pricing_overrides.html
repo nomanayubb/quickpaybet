@@ -1,0 +1,154 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Custom Odds — Pricing Overrides</h1>
+    <p style="color:#555;">
+        Controls the "back" price source (genuine Pinnacle API vs. frozen custom values, one per selection) and how
+        "lay" is computed (API Lay, Relative Lay, or Custom Lay, also one per selection where custom), at up to 4
+        scopes: global default, one match (all users), one user (all matches), or one user on one match. Most
+        specific wins. A user-level override only ever changes what that one person sees/is charged on the
+        sportsbook — it can never affect the shared exchange order book.
+    </p>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <h2>Global default</h2>
+    <table>
+        <thead><tr><th>Back mode</th><th>Custom back (H/D/A)</th><th>Lay mode</th><th>Relative delta</th><th>Custom lay (H/D/A)</th><th></th></tr></thead>
+        <tbody>
+            <tr>
+                <td>{{ config.get_default_back_mode_display }}</td>
+                <td>{{ config.default_back_custom_value_home|default:"—" }} / {{ config.default_back_custom_value_draw|default:"—" }} / {{ config.default_back_custom_value_away|default:"—" }}</td>
+                <td>{{ config.get_default_lay_mode_display }}</td>
+                <td>{{ config.default_lay_relative_delta|default:"—" }}</td>
+                <td>{{ config.default_lay_custom_value_home|default:"—" }} / {{ config.default_lay_custom_value_draw|default:"—" }} / {{ config.default_lay_custom_value_away|default:"—" }}</td>
+                <td>
+                    {% if config.default_back_mode != 'api' or config.default_lay_mode != 'api_lay' %}
+                        <span title="Non-default global settings active">⚠</span>
+                    {% endif %}
+                    <form method="post" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reset_global">
+                        <button type="submit" class="btn">Reset to pure API</button>
+                    </form>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <p style="color:#555;font-size:13px;">Full field-level editing of the global default also available in <a href="/admin/sports/houseliquidityconfig/1/change/">Django admin</a>.</p>
+
+    <h2 style="margin-top:32px;">Add / update an override</h2>
+    <form method="post" style="margin-bottom:16px;">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save">
+        <div class="form-group">
+            <label>User (blank = all users)</label>
+            <select name="user_id">
+                <option value="">— All users —</option>
+                {% for u in all_users %}<option value="{{ u.id }}">{{ u.email }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Match (blank = all matches)</label>
+            <select name="match_id">
+                <option value="">— All matches —</option>
+                {% for m in all_matches %}<option value="{{ m.id }}">{{ m.home_team }} v {{ m.away_team }} ({{ m.sport.name }})</option>{% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>Back mode</label>
+            <select name="back_mode" id="po-back-mode">
+                {% for value, label in back_mode_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+        </div>
+        <div id="po-back-custom-group">
+            <div class="form-group"><label>Custom back — Home</label><input type="number" name="back_custom_value_home" step="0.01" min="1.01"></div>
+            <div class="form-group"><label>Custom back — Draw</label><input type="number" name="back_custom_value_draw" step="0.01" min="1.01"></div>
+            <div class="form-group"><label>Custom back — Away</label><input type="number" name="back_custom_value_away" step="0.01" min="1.01"></div>
+        </div>
+
+        <div class="form-group">
+            <label>Lay mode</label>
+            <select name="lay_mode" id="po-lay-mode">
+                {% for value, label in lay_mode_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-group" id="po-lay-relative-group">
+            <label>Relative lay delta (added to each selection's own back)</label>
+            <input type="number" name="lay_relative_delta" step="0.01" min="-10.00" max="10.00">
+        </div>
+        <div id="po-lay-custom-group">
+            <div class="form-group"><label>Custom lay — Home</label><input type="number" name="lay_custom_value_home" step="0.01" min="1.01"></div>
+            <div class="form-group"><label>Custom lay — Draw</label><input type="number" name="lay_custom_value_draw" step="0.01" min="1.01"></div>
+            <div class="form-group"><label>Custom lay — Away</label><input type="number" name="lay_custom_value_away" step="0.01" min="1.01"></div>
+        </div>
+
+        <button type="submit" class="btn">Save override</button>
+    </form>
+    <script>
+        (function () {
+            function syncVisibility() {
+                var backMode = document.getElementById('po-back-mode').value;
+                document.getElementById('po-back-custom-group').hidden = backMode !== 'custom';
+
+                var layMode = document.getElementById('po-lay-mode').value;
+                document.getElementById('po-lay-relative-group').hidden = layMode !== 'relative';
+                document.getElementById('po-lay-custom-group').hidden = layMode !== 'custom';
+            }
+            document.getElementById('po-back-mode').addEventListener('change', syncVisibility);
+            document.getElementById('po-lay-mode').addEventListener('change', syncVisibility);
+            syncVisibility();
+        })();
+    </script>
+
+    <h2 style="margin-top:32px;">Active overrides</h2>
+    <form method="get" style="margin-bottom:12px;">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search by user email or match teams">
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_pricing_overrides' %}">Reset</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Scope</th><th>User</th><th>Match</th><th>Back mode</th><th>Custom back (H/D/A)</th>
+                <th>Lay mode</th><th>Relative delta</th><th>Custom lay (H/D/A)</th><th>Updated</th><th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for override in overrides_page %}
+                <tr>
+                    <td>⚠ {{ override.scope_label }}</td>
+                    <td>{{ override.user.email|default:"— all users —" }}</td>
+                    <td>{% if override.match %}{{ override.match.home_team }} v {{ override.match.away_team }}{% else %}— all matches —{% endif %}</td>
+                    <td>{{ override.get_back_mode_display }}</td>
+                    <td>{{ override.back_custom_value_home|default:"—" }} / {{ override.back_custom_value_draw|default:"—" }} / {{ override.back_custom_value_away|default:"—" }}</td>
+                    <td>{{ override.get_lay_mode_display }}</td>
+                    <td>{{ override.lay_relative_delta|default:"—" }}</td>
+                    <td>{{ override.lay_custom_value_home|default:"—" }} / {{ override.lay_custom_value_draw|default:"—" }} / {{ override.lay_custom_value_away|default:"—" }}</td>
+                    <td>{{ override.updated_at|date:"Y-m-d H:i" }}</td>
+                    <td>
+                        <form method="post" style="display:inline;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="override_id" value="{{ override.id }}">
+                            <button type="submit" class="btn">Reset to default</button>
+                        </form>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="10">No active overrides — everything is on the global default.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if overrides_page.has_previous or overrides_page.has_next %}
+        <div style="margin-top:12px;">
+            {% if overrides_page.has_previous %}<a class="btn" href="?page={{ overrides_page.previous_page_number }}&q={{ query }}">Previous</a>{% endif %}
+            <span>Page {{ overrides_page.number }} of {{ overrides_page.paginator.num_pages }}</span>
+            {% if overrides_page.has_next %}<a class="btn" href="?page={{ overrides_page.next_page_number }}&q={{ query }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+{% endblock %}

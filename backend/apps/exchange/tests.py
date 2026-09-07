@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from apps.sports.models import HouseLiquidityConfig, Sport, Match
+from apps.sports.models import BackMode, HouseLiquidityConfig, LayMode, PricingOverride, Sport, Match
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
@@ -710,3 +710,70 @@ class HouseLaySeedingTests(TestCase):
         cache.add(_house_reseed_lock_key(self.match.id), True, timeout=15)
         sync_house_orders_for_match(self.match)
         self.assertEqual(ExchangeOrder.objects.filter(user=self.house_user).count(), 0)
+
+
+class CustomOddsHouseSeedingTests(TestCase):
+    """
+    Confirms the "Custom Odds" pricing-mode system (Phase 8) correctly
+    drives the house's real seeded exchange orders - a match-level
+    PricingOverride is what apps.sports.pricing.resolve_match_pricing_mode
+    picks up, feeding sync_house_orders_for_match exactly like the plain
+    API-sourced odds already did.
+    """
+    def setUp(self):
+        cache.clear()
+        HouseLiquidityConfig.objects.filter(pk=1).delete()
+        self.config = HouseLiquidityConfig.objects.create(
+            pk=1, is_enabled=True,
+            default_lay_spread=Decimal('0.10'),
+            default_max_liability_per_selection=Decimal('1000.00'),
+        )
+
+        self.house_user = User.objects.create_user(email='cohouse@example.com', password='testpass123')
+        self.house_user.is_house_account = True
+        self.house_user.save(update_fields=['is_house_account'])
+        Wallet.objects.get_or_create(user=self.house_user)
+        deposit_funds(self.house_user, Decimal('1000000'))
+
+        self.sport = Sport.objects.create(name='CustomOddsHouseSport', slug='custom-odds-house-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='H', away_team='A',
+            start_time=timezone.now() + timezone.timedelta(days=1),
+            status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+
+    def test_custom_back_mode_seeds_house_orders_at_the_frozen_value(self):
+        PricingOverride.objects.create(
+            match=self.match, back_mode=BackMode.CUSTOM, back_custom_value_home=Decimal('3.15'),
+        )
+        sync_house_orders_for_match(self.match)
+        back_order = ExchangeOrder.objects.get(user=self.house_user, match=self.match, selection='home', side='back')
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, match=self.match, selection='home', side='lay')
+        self.assertEqual(back_order.odds, Decimal('3.15'))
+        self.assertEqual(lay_order.odds, Decimal('3.25'))  # 3.15 custom back + 0.10 house spread (API Lay, default)
+
+    def test_relative_lay_mode_seeds_house_lay_order_correctly(self):
+        PricingOverride.objects.create(
+            match=self.match, lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('0.50'),
+        )
+        sync_house_orders_for_match(self.match)
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, match=self.match, selection='home', side='lay')
+        self.assertEqual(lay_order.odds, Decimal('2.50'))  # 2.00 + 0.50
+
+    def test_custom_lay_mode_seeds_house_lay_order_at_the_independent_value(self):
+        PricingOverride.objects.create(
+            match=self.match, lay_mode=LayMode.CUSTOM, lay_custom_value_home=Decimal('6.00'),
+        )
+        sync_house_orders_for_match(self.match)
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, match=self.match, selection='home', side='lay')
+        self.assertEqual(lay_order.odds, Decimal('6.00'))
+
+    def test_negative_relative_delta_never_produces_a_house_lay_order_below_back(self):
+        PricingOverride.objects.create(
+            match=self.match, lay_mode=LayMode.RELATIVE, lay_relative_delta=Decimal('-1.50'),
+        )
+        sync_house_orders_for_match(self.match)
+        back_order = ExchangeOrder.objects.get(user=self.house_user, match=self.match, selection='home', side='back')
+        lay_order = ExchangeOrder.objects.get(user=self.house_user, match=self.match, selection='home', side='lay')
+        self.assertGreater(lay_order.odds, back_order.odds)

@@ -56,7 +56,12 @@
                     <td title="{% if u.id in active_ids %}Currently signed in{% else %}Not currently signed in{% endif %}">
                         {% if u.id in active_ids %}🟢{% else %}⚪{% endif %}
                     </td>
-                    <td>{{ u.email }}</td>
+                    <td>
+                        {{ u.email }}
+                        {% if u.id in overridden_user_ids %}
+                            <a href="{% url 'web:admin_pricing_overrides' %}?q={{ u.email }}" title="This user has an active odds/pricing override">⚠</a>
+                        {% endif %}
+                    </td>
                     <td style="font-size:11px; white-space:nowrap;">{{ u.date_joined|date:"Y-m-d H:i" }}</td>
                     <td style="font-size:11px; white-space:nowrap;">{{ u.first_bet_at|date:"Y-m-d H:i"|default:"-" }}</td>
                     <td style="font-size:11px; white-space:nowrap;">{{ u.last_bet_at|date:"Y-m-d H:i"|default:"-" }}</td>
