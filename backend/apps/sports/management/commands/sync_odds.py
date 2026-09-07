@@ -5,7 +5,7 @@ from django.utils.dateparse import parse_datetime
 
 from apps.sports.models import Sport, Tournament, Match
 from apps.sports.pricing import normalize_odds
-from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
+from apps.sports.providers import get_odds_provider
 
 
 class Command(BaseCommand):
@@ -121,10 +121,10 @@ class Command(BaseCommand):
                     )
                     continue
 
-                if sport_key.lower() in INVALID_PROVIDER_KEYS:
+                if sport_key.lower() in provider.invalid_sport_keys:
                     self.stdout.write(
                         self.style.WARNING(
-                            f'Skipping sport "{sport.name}" because "{sport_key}" is not valid for The Odds API.'
+                            f'Skipping sport "{sport.name}" because "{sport_key}" is not valid for {provider.name}.'
                         )
                     )
                     continue

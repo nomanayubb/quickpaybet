@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from apps.sports.models import Sport
-from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
+from apps.sports.providers import get_odds_provider
 
 
 class Command(BaseCommand):
@@ -37,7 +37,7 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
-            if key.lower() in INVALID_PROVIDER_KEYS:
+            if key.lower() in provider.invalid_sport_keys:
                 self.stdout.write(
                     self.style.WARNING(
                         f'Skipping sport "{title}" because "{key}" is not supported for odds sync.'

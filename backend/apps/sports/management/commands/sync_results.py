@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.utils.dateparse import parse_datetime
 
 from apps.sports.models import Sport, Match
-from apps.sports.providers import get_odds_provider, INVALID_PROVIDER_KEYS
+from apps.sports.providers import get_odds_provider
 from apps.bets.services import settle_bets_for_match
 from apps.exchange.services import settle_exchange_for_match
 
@@ -28,10 +28,10 @@ class Command(BaseCommand):
             )
             return updated
 
-        if sport_key.lower() in INVALID_PROVIDER_KEYS:
+        if sport_key.lower() in provider.invalid_sport_keys:
             self.stdout.write(
                 self.style.WARNING(
-                    f'Skipping sport "{sport.name}" because "{sport_key}" is not valid for The Odds API.'
+                    f'Skipping sport "{sport.name}" because "{sport_key}" is not valid for {provider.name}.'
                 )
             )
             return updated
