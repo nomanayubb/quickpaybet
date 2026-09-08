@@ -46,6 +46,19 @@
             <label>Odds adjustment override (-99.00 to 99.00, blank = use site-wide default)</label>
             <input type="number" name="odds_adjustment" step="0.01" min="-99.00" max="99.00" value="{{ match.odds_adjustment|default_if_none:'' }}">
         </div>
+        <div class="form-group">
+            <label>Lay-spread override (0.01 to 5.00, blank = use site-wide default) — the distance added to the live back price for the sportsbook's lay reference and the exchange's house-seeded liquidity</label>
+            <input type="number" name="lay_spread_override" step="0.01" min="0.01" max="5.00" value="{{ match.lay_spread_override|default_if_none:'' }}">
+        </div>
+        <div class="form-group">
+            <label>Refresh mode override (blank = use site-wide default)</label>
+            <select name="refresh_mode_override">
+                <option value="">— Use site-wide default —</option>
+                {% for value, label in refresh_mode_choices %}
+                    <option value="{{ value }}" {% if match.refresh_mode_override == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
         <button type="submit" class="btn">Save match</button>
     </form>
 

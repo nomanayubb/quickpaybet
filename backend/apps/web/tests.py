@@ -15,8 +15,10 @@ from apps.bets.services import place_bet
 from apps.cashback.models import CashbackCredit
 from apps.exchange.models import ExchangeFill, ExchangeOrder
 from apps.payments.models import CryptoPayment
-from apps.sports.models import Match, RealtimeOddsConfig, RefreshMode, Sport
-from apps.sports.pricing import normalize_odds
+from apps.sports.models import Match, RealtimeOddsConfig, RefreshMode, Sport, UserMatchOddsOverride
+from apps.sports.pricing import (
+    normalize_odds, resolve_user_extra_adjustment, resolve_user_extra_lay_spread,
+)
 from apps.wallet.models import Wallet
 from apps.wallet.services import deposit_funds
 
@@ -332,3 +334,238 @@ class RefreshModeTests(TestCase):
         data = response.json()
         self.assertFalse(data['should_continue_polling'])
         self.assertFalse(data['manual_refresh_available'])
+
+
+class AdminEditMatchViewTests(TestCase):
+    """
+    Real gap found live: this panel form had its own manually-coded
+    +-10.00 bound on odds_adjustment left stale after the model itself
+    was widened to +-99.00, and never exposed lay_spread_override or
+    refresh_mode_override at all (both Django-admin-only until now).
+    """
+    def setUp(self):
+        self.admin = User.objects.create_user(email='matcheditadmin@example.com', password='testpass123', is_staff=True)
+        self.client.force_login(self.admin)
+        self.sport = Sport.objects.create(name='MatchEditSport', slug='match-edit-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='Home', away_team='Away',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+
+    def _post(self, **overrides):
+        data = {
+            'home_team': self.match.home_team,
+            'away_team': self.match.away_team,
+            'status': self.match.status,
+            'start_time': self.match.start_time.strftime('%Y-%m-%dT%H:%M'),
+            'odds_home': '2.00', 'odds_draw': '3.00', 'odds_away': '4.00',
+            'odds_adjustment': '', 'lay_spread_override': '', 'refresh_mode_override': '',
+        }
+        data.update(overrides)
+        return self.client.post(reverse('web:admin_edit_match', args=[self.match.id]), data)
+
+    def test_odds_adjustment_beyond_old_10_limit_is_accepted(self):
+        response = self._post(odds_adjustment='42.20')
+        self.assertRedirects(response, reverse('web:admin_matches'))
+        self.match.refresh_from_db()
+        self.assertEqual(self.match.odds_adjustment, Decimal('42.20'))
+
+    def test_odds_adjustment_beyond_99_is_rejected(self):
+        response = self._post(odds_adjustment='99.01')
+        self.assertEqual(response.status_code, 200)
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.odds_adjustment)
+
+    def test_lay_spread_override_saves(self):
+        response = self._post(lay_spread_override='0.50')
+        self.assertRedirects(response, reverse('web:admin_matches'))
+        self.match.refresh_from_db()
+        self.assertEqual(self.match.lay_spread_override, Decimal('0.50'))
+
+    def test_lay_spread_override_out_of_range_is_rejected(self):
+        response = self._post(lay_spread_override='6.00')
+        self.assertEqual(response.status_code, 200)
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.lay_spread_override)
+
+    def test_refresh_mode_override_saves(self):
+        response = self._post(refresh_mode_override=RefreshMode.MANUAL_ONLY)
+        self.assertRedirects(response, reverse('web:admin_matches'))
+        self.match.refresh_from_db()
+        self.assertEqual(self.match.refresh_mode_override, RefreshMode.MANUAL_ONLY)
+
+    def test_blank_refresh_mode_override_clears_it(self):
+        self.match.refresh_mode_override = RefreshMode.STOPPED
+        self.match.save(update_fields=['refresh_mode_override'])
+        response = self._post(refresh_mode_override='')
+        self.assertRedirects(response, reverse('web:admin_matches'))
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.refresh_mode_override)
+
+
+class AdminOddsAdjustmentViewTests(TestCase):
+    """
+    The unified user/user-match dashboard for the odds-adjustment and
+    lay-spread cascades - previously only reachable via raw Django admin.
+    Unlike Custom Odds' PricingOverride (one unified nullable-FK table),
+    this data lives in three separate places (Match, User,
+    UserMatchOddsOverride), so these tests specifically confirm the save
+    dispatches to the right one AND that the change is visible through the
+    real resolver functions, not just sitting in the right table.
+    """
+    def setUp(self):
+        self.admin = User.objects.create_user(email='oddsadjadmin@example.com', password='testpass123', is_staff=True)
+        self.client.force_login(self.admin)
+        self.target_user = User.objects.create_user(email='oddsadjtarget@example.com', password='testpass123')
+        self.sport = Sport.objects.create(name='OddsAdjSport', slug='odds-adj-sport')
+        self.match = Match.objects.create(
+            sport=self.sport, home_team='Home', away_team='Away',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('2.00'), odds_draw=Decimal('3.00'), odds_away=Decimal('4.00'),
+        )
+        self.other_match = Match.objects.create(
+            sport=self.sport, home_team='Home2', away_team='Away2',
+            start_time=timezone.now() + timezone.timedelta(hours=1), status=Match.Status.SCHEDULED,
+            odds_home=Decimal('5.00'), odds_draw=Decimal('6.00'), odds_away=Decimal('7.00'),
+        )
+
+    def _post(self, **overrides):
+        data = {'action': 'save', 'user_id': '', 'match_id': '', 'adjustment': '', 'lay_spread_override': ''}
+        data.update(overrides)
+        return self.client.post(reverse('web:admin_odds_adjustment'), data)
+
+    def test_match_only_save_writes_to_match(self):
+        response = self._post(match_id=self.match.id, adjustment='0.30')
+        self.assertRedirects(response, reverse('web:admin_odds_adjustment'))
+        self.match.refresh_from_db()
+        self.assertEqual(self.match.odds_adjustment, Decimal('0.30'))
+
+    def test_user_only_save_writes_to_user(self):
+        response = self._post(user_id=self.target_user.id, adjustment='0.75', lay_spread_override='0.20')
+        self.assertRedirects(response, reverse('web:admin_odds_adjustment'))
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.odds_adjustment_override, Decimal('0.75'))
+        self.assertEqual(self.target_user.lay_spread_override, Decimal('0.20'))
+
+    def test_user_and_match_save_creates_override_row(self):
+        response = self._post(user_id=self.target_user.id, match_id=self.match.id, adjustment='1.10')
+        self.assertRedirects(response, reverse('web:admin_odds_adjustment'))
+        override = UserMatchOddsOverride.objects.get(user=self.target_user, match=self.match)
+        self.assertEqual(override.adjustment, Decimal('1.10'))
+        self.assertIsNone(override.lay_spread_override)
+
+    def test_resaving_same_user_match_pair_updates_not_duplicates(self):
+        UserMatchOddsOverride.objects.create(user=self.target_user, match=self.match, adjustment=Decimal('1.00'))
+        self._post(user_id=self.target_user.id, match_id=self.match.id, adjustment='2.00')
+        self.assertEqual(UserMatchOddsOverride.objects.filter(user=self.target_user, match=self.match).count(), 1)
+        override = UserMatchOddsOverride.objects.get(user=self.target_user, match=self.match)
+        self.assertEqual(override.adjustment, Decimal('2.00'))
+
+    def test_no_user_and_no_match_rejected(self):
+        response = self._post(adjustment='0.50')
+        self.assertEqual(response.status_code, 200)
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.odds_adjustment)
+
+    def test_no_values_rejected(self):
+        response = self._post(user_id=self.target_user.id)
+        self.assertEqual(response.status_code, 200)
+        self.target_user.refresh_from_db()
+        self.assertIsNone(self.target_user.odds_adjustment_override)
+
+    def test_adjustment_out_of_range_rejected(self):
+        response = self._post(user_id=self.target_user.id, adjustment='99.01')
+        self.assertEqual(response.status_code, 200)
+        self.target_user.refresh_from_db()
+        self.assertIsNone(self.target_user.odds_adjustment_override)
+
+    def test_lay_spread_out_of_range_rejected(self):
+        response = self._post(user_id=self.target_user.id, lay_spread_override='6.00')
+        self.assertEqual(response.status_code, 200)
+        self.target_user.refresh_from_db()
+        self.assertIsNone(self.target_user.lay_spread_override)
+
+    def test_reset_user_clears_user_fields(self):
+        self.target_user.odds_adjustment_override = Decimal('0.50')
+        self.target_user.lay_spread_override = Decimal('0.30')
+        self.target_user.save(update_fields=['odds_adjustment_override', 'lay_spread_override'])
+        response = self.client.post(
+            reverse('web:admin_odds_adjustment'), {'action': 'reset_user', 'user_id': self.target_user.id},
+        )
+        self.assertRedirects(response, reverse('web:admin_odds_adjustment'))
+        self.target_user.refresh_from_db()
+        self.assertIsNone(self.target_user.odds_adjustment_override)
+        self.assertIsNone(self.target_user.lay_spread_override)
+
+    def test_reset_match_clears_match_fields(self):
+        self.match.odds_adjustment = Decimal('0.30')
+        self.match.lay_spread_override = Decimal('0.20')
+        self.match.save(update_fields=['odds_adjustment', 'lay_spread_override'])
+        response = self.client.post(
+            reverse('web:admin_odds_adjustment'), {'action': 'reset_match', 'match_id': self.match.id},
+        )
+        self.assertRedirects(response, reverse('web:admin_odds_adjustment'))
+        self.match.refresh_from_db()
+        self.assertIsNone(self.match.odds_adjustment)
+        self.assertIsNone(self.match.lay_spread_override)
+
+    def test_reset_user_match_deletes_row(self):
+        override = UserMatchOddsOverride.objects.create(user=self.target_user, match=self.match, adjustment=Decimal('1.00'))
+        response = self.client.post(
+            reverse('web:admin_odds_adjustment'), {'action': 'reset_user_match', 'override_id': override.id},
+        )
+        self.assertRedirects(response, reverse('web:admin_odds_adjustment'))
+        self.assertFalse(UserMatchOddsOverride.objects.filter(pk=override.id).exists())
+
+    def test_end_to_end_user_only_visible_through_resolvers(self):
+        self._post(user_id=self.target_user.id, adjustment='0.75', lay_spread_override='0.20')
+        self.target_user.refresh_from_db()
+        self.assertEqual(resolve_user_extra_adjustment(self.target_user, self.match), Decimal('0.75'))
+        self.assertEqual(resolve_user_extra_lay_spread(self.target_user, self.match), Decimal('0.20'))
+        # A different match for the same user still gets the user-global value.
+        self.assertEqual(resolve_user_extra_adjustment(self.target_user, self.other_match), Decimal('0.75'))
+
+    def test_end_to_end_user_match_beats_user_only(self):
+        self._post(user_id=self.target_user.id, adjustment='0.10')
+        self._post(user_id=self.target_user.id, match_id=self.match.id, adjustment='2.00')
+        self.target_user.refresh_from_db()
+        self.assertEqual(resolve_user_extra_adjustment(self.target_user, self.match), Decimal('2.00'))
+        # The other match isn't covered by the specific override - falls back to user-global.
+        self.assertEqual(resolve_user_extra_adjustment(self.target_user, self.other_match), Decimal('0.10'))
+
+    def test_end_to_end_reset_falls_back_correctly(self):
+        self._post(user_id=self.target_user.id, adjustment='0.10')
+        self._post(user_id=self.target_user.id, match_id=self.match.id, adjustment='2.00')
+        self.target_user.refresh_from_db()
+        override = UserMatchOddsOverride.objects.get(user=self.target_user, match=self.match)
+        self.client.post(
+            reverse('web:admin_odds_adjustment'), {'action': 'reset_user_match', 'override_id': override.id},
+        )
+        self.assertEqual(resolve_user_extra_adjustment(self.target_user, self.match), Decimal('0.10'))
+
+    def test_non_dashboard_user_redirected(self):
+        self.client.logout()
+        plain_user = User.objects.create_user(email='oddsadjplain@example.com', password='testpass123')
+        self.client.force_login(plain_user)
+        response = self.client.get(reverse('web:admin_odds_adjustment'))
+        self.assertEqual(response.status_code, 302)
+
+    def test_global_default_shows_no_warning_at_true_defaults(self):
+        # Real bug found live: comparing a Decimal field to a bare float
+        # literal in the template (`!= 0.10`) is never equal in Python even
+        # at the true default, so the warning icon showed unconditionally.
+        # Fixed by computing the comparison as a Decimal-to-Decimal check
+        # in the view and passing a plain boolean to the template.
+        response = self.client.get(reverse('web:admin_odds_adjustment'))
+        self.assertTrue(response.context['global_is_default'])
+        self.assertNotContains(response, 'Non-default global settings active')
+
+    def test_global_default_shows_warning_when_changed(self):
+        from apps.sports.models import OddsAdjustmentConfig
+        config = OddsAdjustmentConfig.get_solo()
+        config.default_adjustment = Decimal('0.50')
+        config.save()
+        response = self.client.get(reverse('web:admin_odds_adjustment'))
+        self.assertFalse(response.context['global_is_default'])
+        self.assertContains(response, 'Non-default global settings active')

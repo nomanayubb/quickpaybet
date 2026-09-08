@@ -32,7 +32,8 @@ from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.cashback.models import CashbackCredit
 from apps.rewards.models import RewardPackage, UserRewardClaim
 from apps.sports.models import (
-    BackMode, HouseLiquidityConfig, LayMode, Match, PricingOverride, RealtimeOddsConfig, Sport, Tournament,
+    BackMode, HouseLiquidityConfig, LayMode, Match, OddsAdjustmentConfig, PricingOverride, RealtimeOddsConfig,
+    RefreshMode, Sport, Tournament, UserMatchOddsOverride,
 )
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
@@ -336,6 +337,8 @@ def admin_edit_match_view(request, match_id):
             odds_draw_raw = request.POST.get('odds_draw', '').strip()
             odds_away_raw = request.POST.get('odds_away', '').strip()
             odds_adjustment_raw = request.POST.get('odds_adjustment', '').strip()
+            lay_spread_override_raw = request.POST.get('lay_spread_override', '').strip()
+            refresh_mode_override_raw = request.POST.get('refresh_mode_override', '').strip()
 
             if not home_team or not away_team:
                 raise ValidationError('Team names are required.')
@@ -364,9 +367,23 @@ def admin_edit_match_view(request, match_id):
                     d = Decimal(value)
                 except InvalidOperation:
                     raise ValidationError('Odds adjustment must be a valid decimal number.')
-                if d < Decimal('-10.00') or d > Decimal('10.00'):
-                    raise ValidationError('Odds adjustment must be between -10.00 and 10.00.')
+                if d < Decimal('-99.00') or d > Decimal('99.00'):
+                    raise ValidationError('Odds adjustment must be between -99.00 and 99.00.')
                 return d
+
+            def parse_lay_spread(value):
+                if value == '' or value is None:
+                    return None
+                try:
+                    d = Decimal(value)
+                except InvalidOperation:
+                    raise ValidationError('Lay-spread override must be a valid decimal number.')
+                if d < Decimal('0.01') or d > Decimal('5.00'):
+                    raise ValidationError('Lay-spread override must be between 0.01 and 5.00.')
+                return d
+
+            if refresh_mode_override_raw and refresh_mode_override_raw not in RefreshMode.values:
+                raise ValidationError('Invalid refresh mode.')
 
             match.home_team = home_team
             match.away_team = away_team
@@ -376,6 +393,8 @@ def admin_edit_match_view(request, match_id):
             match.odds_draw = parse_decimal(odds_draw_raw)
             match.odds_away = parse_decimal(odds_away_raw)
             match.odds_adjustment = parse_adjustment(odds_adjustment_raw)
+            match.lay_spread_override = parse_lay_spread(lay_spread_override_raw)
+            match.refresh_mode_override = refresh_mode_override_raw or None
 
             match.save()
             return redirect('web:admin_matches')
@@ -389,6 +408,7 @@ def admin_edit_match_view(request, match_id):
             'match': match,
             'error': error,
             'active': 'admin_matches',
+            'refresh_mode_choices': RefreshMode.choices,
         },
     )
 
@@ -727,6 +747,155 @@ def admin_pricing_overrides_view(request):
             'all_users': User.objects.order_by('email').only('id', 'email'),
             'all_matches': Match.objects.order_by('-start_time').select_related('sport')[:200],
             'active': 'admin_pricing_overrides',
+        },
+    )
+
+
+def admin_odds_adjustment_view(request):
+    """
+    "Odds Adjustment & Lay Spread" dashboard - one place to set the
+    non-global levels of the two flat cascades in apps.sports.pricing
+    (resolve_effective_adjustment/resolve_user_extra_adjustment and
+    resolve_effective_lay_spread/resolve_user_extra_lay_spread). Mirrors
+    admin_pricing_overrides_view's exact shape, but unlike PricingOverride
+    (one unified nullable-FK table) this data lives in three separate
+    places - Match, User, and UserMatchOddsOverride - so saving dispatches
+    to whichever one applies based on which of user_id/match_id is set.
+    The global default (OddsAdjustmentConfig/HouseLiquidityConfig) is
+    shown read-only with its own reset action, never edited here.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    odds_config = OddsAdjustmentConfig.get_solo()
+    lay_config = HouseLiquidityConfig.get_solo()
+    error = None
+
+    def parse_adjustment(value):
+        if value == '' or value is None:
+            return None
+        try:
+            d = Decimal(value)
+        except InvalidOperation:
+            raise ValidationError('Odds adjustment must be a valid decimal number.')
+        if d < Decimal('-99.00') or d > Decimal('99.00'):
+            raise ValidationError('Odds adjustment must be between -99.00 and 99.00.')
+        return d
+
+    def parse_lay_spread(value):
+        if value == '' or value is None:
+            return None
+        try:
+            d = Decimal(value)
+        except InvalidOperation:
+            raise ValidationError('Lay-spread override must be a valid decimal number.')
+        if d < Decimal('0.01') or d > Decimal('5.00'):
+            raise ValidationError('Lay-spread override must be between 0.01 and 5.00.')
+        return d
+
+    if request.method == 'POST':
+        action = request.POST.get('action', '').strip()
+        try:
+            if action == 'reset_global':
+                odds_config.default_adjustment = Decimal('0.00')
+                odds_config.save()
+                lay_config.default_lay_spread = Decimal('0.10')
+                lay_config.save()
+            elif action == 'reset_user':
+                user_id = request.POST.get('user_id')
+                User.objects.filter(pk=user_id).update(odds_adjustment_override=None, lay_spread_override=None)
+            elif action == 'reset_match':
+                match_id = request.POST.get('match_id')
+                Match.objects.filter(pk=match_id).update(odds_adjustment=None, lay_spread_override=None)
+            elif action == 'reset_user_match':
+                override_id = request.POST.get('override_id')
+                UserMatchOddsOverride.objects.filter(pk=override_id).delete()
+            elif action == 'save':
+                user_id = request.POST.get('user_id', '').strip()
+                match_id = request.POST.get('match_id', '').strip()
+                if not user_id and not match_id:
+                    raise ValidationError('Select a user, a match, or both.')
+
+                adjustment = parse_adjustment(request.POST.get('adjustment', '').strip())
+                lay_spread = parse_lay_spread(request.POST.get('lay_spread_override', '').strip())
+                if adjustment is None and lay_spread is None:
+                    raise ValidationError('Set at least one of adjustment or lay-spread override.')
+
+                if user_id and match_id:
+                    override, _ = UserMatchOddsOverride.objects.get_or_create(user_id=user_id, match_id=match_id)
+                    override.adjustment = adjustment
+                    override.lay_spread_override = lay_spread
+                    override.full_clean()
+                    override.save()
+                elif user_id:
+                    User.objects.filter(pk=user_id).update(
+                        odds_adjustment_override=adjustment, lay_spread_override=lay_spread,
+                    )
+                else:
+                    Match.objects.filter(pk=match_id).update(
+                        odds_adjustment=adjustment, lay_spread_override=lay_spread,
+                    )
+            return redirect('web:admin_odds_adjustment')
+        except (ValidationError, ValueError, InvalidOperation, IntegrityError) as exc:
+            error = _error_message(exc)
+
+    query = request.GET.get('q', '').strip()
+    from django.db.models import Q
+
+    user_rows_qs = User.objects.exclude(odds_adjustment_override=None, lay_spread_override=None)
+    override_rows_qs = UserMatchOddsOverride.objects.select_related('user', 'match')
+    match_rows_qs = Match.objects.exclude(odds_adjustment=None, lay_spread_override=None).select_related('sport')
+    if query:
+        user_rows_qs = user_rows_qs.filter(email__icontains=query)
+        override_rows_qs = override_rows_qs.filter(
+            Q(user__email__icontains=query) | Q(match__home_team__icontains=query) | Q(match__away_team__icontains=query)
+        )
+        match_rows_qs = match_rows_qs.filter(Q(home_team__icontains=query) | Q(away_team__icontains=query))
+
+    rows = []
+    for u in user_rows_qs:
+        rows.append({
+            'scope': 'user', 'scope_label': 'User (all matches)',
+            'user': u, 'match': None,
+            'adjustment': u.odds_adjustment_override, 'lay_spread_override': u.lay_spread_override,
+            'updated_at': None, 'reset_action': 'reset_user', 'reset_id': u.id,
+        })
+    for o in override_rows_qs:
+        rows.append({
+            'scope': 'user_match', 'scope_label': 'User + Match',
+            'user': o.user, 'match': o.match,
+            'adjustment': o.adjustment, 'lay_spread_override': o.lay_spread_override,
+            'updated_at': o.updated_at, 'reset_action': 'reset_user_match', 'reset_id': o.id,
+        })
+    for m in match_rows_qs:
+        rows.append({
+            'scope': 'match', 'scope_label': 'Match (all users)',
+            'user': None, 'match': m,
+            'adjustment': m.odds_adjustment, 'lay_spread_override': m.lay_spread_override,
+            'updated_at': None, 'reset_action': 'reset_match', 'reset_id': m.id,
+        })
+    _very_old = timezone.now() - timedelta(days=36500)
+    rows.sort(key=lambda r: r['updated_at'] or _very_old, reverse=True)
+
+    paginator = Paginator(rows, 25)
+    rows_page = paginator.get_page(request.GET.get('page'))
+
+    return render(
+        request,
+        'web/admin_odds_adjustment.html',
+        {
+            'odds_config': odds_config,
+            'lay_config': lay_config,
+            'global_is_default': (
+                odds_config.default_adjustment == Decimal('0.00')
+                and lay_config.default_lay_spread == Decimal('0.10')
+            ),
+            'rows_page': rows_page,
+            'query': query,
+            'error': error,
+            'all_users': User.objects.order_by('email').only('id', 'email'),
+            'all_matches': Match.objects.order_by('-start_time').select_related('sport')[:200],
+            'active': 'admin_odds_adjustment',
         },
     )
 

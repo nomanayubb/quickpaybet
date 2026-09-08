@@ -1,0 +1,120 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Odds Adjustment & Lay Spread</h1>
+    <p style="color:#555;">
+        Sets the flat +/- shift added to live API odds ("Odds adjustment") and the distance added to a live back
+        price for the sportsbook's lay reference ("Lay spread"), at up to 4 scopes: global default, one match (all
+        users), one user (all matches), or one user on one match. Most specific wins. A user-level value only ever
+        changes what that one person sees on the sportsbook — it can never affect the shared exchange order book.
+    </p>
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <h2>Global default</h2>
+    <table>
+        <thead><tr><th>Default odds adjustment</th><th>Default lay spread</th><th></th></tr></thead>
+        <tbody>
+            <tr>
+                <td>{{ odds_config.default_adjustment }}</td>
+                <td>{{ lay_config.default_lay_spread }}</td>
+                <td>
+                    {% if not global_is_default %}
+                        <span title="Non-default global settings active">⚠</span>
+                    {% endif %}
+                    <form method="post" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reset_global">
+                        <button type="submit" class="btn">Reset to default</button>
+                    </form>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <p style="color:#555;font-size:13px;">
+        Full field-level editing of the global default also available in
+        <a href="/admin/sports/oddsadjustmentconfig/1/change/">Django admin (Odds Adjustment Config)</a> and
+        <a href="/admin/sports/houseliquidityconfig/1/change/">Django admin (House Liquidity Config)</a>.
+    </p>
+
+    <h2 style="margin-top:32px;">Add / update an override</h2>
+    <form method="post" style="margin-bottom:16px;">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save">
+        <div class="form-group">
+            <label>User (blank = all users)</label>
+            <select name="user_id">
+                <option value="">— All users —</option>
+                {% for u in all_users %}<option value="{{ u.id }}">{{ u.email }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Match (blank = all matches)</label>
+            <select name="match_id">
+                <option value="">— All matches —</option>
+                {% for m in all_matches %}<option value="{{ m.id }}">{{ m.home_team }} v {{ m.away_team }} ({{ m.sport.name }})</option>{% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Odds adjustment (-99.00 to 99.00)</label>
+            <input type="number" name="adjustment" step="0.01" min="-99.00" max="99.00">
+        </div>
+        <div class="form-group">
+            <label>Lay spread (0.01 to 5.00)</label>
+            <input type="number" name="lay_spread_override" step="0.01" min="0.01" max="5.00">
+        </div>
+        <button type="submit" class="btn">Save override</button>
+    </form>
+
+    <h2 style="margin-top:32px;">Active overrides</h2>
+    <form method="get" style="margin-bottom:12px;">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search by user email or match teams">
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_odds_adjustment' %}">Reset</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>Scope</th><th>User</th><th>Match</th><th>Odds adjustment</th><th>Lay spread</th><th>Updated</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for row in rows_page %}
+                <tr>
+                    <td>⚠ {{ row.scope_label }}</td>
+                    <td>{{ row.user.email|default:"— all users —" }}</td>
+                    <td>{% if row.match %}{{ row.match.home_team }} v {{ row.match.away_team }}{% else %}— all matches —{% endif %}</td>
+                    <td>{{ row.adjustment|default:"—" }}</td>
+                    <td>{{ row.lay_spread_override|default:"—" }}</td>
+                    <td>{{ row.updated_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                    <td>
+                        {% if row.scope == 'match' %}
+                            <a class="btn" href="{% url 'web:admin_edit_match' row.match.id %}">Edit on match page →</a>
+                        {% else %}
+                            <form method="post" style="display:inline;">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="{{ row.reset_action }}">
+                                {% if row.scope == 'user' %}
+                                    <input type="hidden" name="user_id" value="{{ row.reset_id }}">
+                                {% else %}
+                                    <input type="hidden" name="override_id" value="{{ row.reset_id }}">
+                                {% endif %}
+                                <button type="submit" class="btn">Reset to default</button>
+                            </form>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">No active overrides — everything is on the global default.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if rows_page.has_previous or rows_page.has_next %}
+        <div style="margin-top:12px;">
+            {% if rows_page.has_previous %}<a class="btn" href="?page={{ rows_page.previous_page_number }}&q={{ query }}">Previous</a>{% endif %}
+            <span>Page {{ rows_page.number }} of {{ rows_page.paginator.num_pages }}</span>
+            {% if rows_page.has_next %}<a class="btn" href="?page={{ rows_page.next_page_number }}&q={{ query }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+{% endblock %}
