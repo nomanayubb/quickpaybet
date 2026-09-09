@@ -51,7 +51,7 @@
             <span style="opacity:0.6;flex-shrink:0;">|</span>
             <span style="flex-shrink:0;white-space:nowrap;">B: <span id="casino-hud-balance">-</span></span>
             <span style="opacity:0.6;flex-shrink:0;">|</span>
-            <span style="flex-shrink:0;white-space:nowrap;">L: <span id="casino-hud-exposure">-</span></span>
+            <span style="flex-shrink:0;white-space:nowrap;">Exposure: <span id="casino-hud-exposure">-</span></span>
         </div>
 
         <!-- Consent gate: must confirm before the game becomes visible/interactive -->
@@ -91,9 +91,23 @@
             // holding L on screen for at least that long even if the real
             // round resolved faster than that.
             var MIN_EXPOSURE_HOLD_MS = 700;
+            // Waija's own backend can settle (and report to us) a round's
+            // result well before its own frontend animation finishes
+            // revealing that result to the player - we have no way to
+            // observe that animation (cross-origin iframe), so a WIN
+            // reveal specifically gets a longer buffer than a loss does,
+            // to reduce the chance of the HUD updating before the player
+            // has actually seen the win happen on screen. A loss has no
+            // equivalent animation worth waiting for, so it still only
+            // gets the short MIN_EXPOSURE_HOLD_MS above. This is a
+            // heuristic, not a guarantee - a long bonus-feature reveal can
+            // still outlast it, since there's no signal from the iframe
+            // telling us when it's actually done.
+            var WIN_REVEAL_DELAY_MS = 2500;
             var exposureShowingNonZero = false;
             var exposureShownAt = 0;
-            var pendingClearTimer = null;
+            var balanceAtBetTime = null;
+            var pendingRevealTimer = null;
 
             function formatAmount(walletAmount, usdAmount) {
                 if (walletCurrency === 'PKR') {
@@ -102,28 +116,44 @@
                 return '$' + Number(usdAmount).toFixed(2);
             }
 
+            function showResult(data) {
+                hudBalance.textContent = formatAmount(data.balance_wallet, data.balance_usd);
+                hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
+            }
+
             function pollStatus() {
                 fetch(statusUrl, { credentials: 'same-origin' })
                     .then(function (res) { if (!res.ok) { throw new Error('bad status'); } return res.json(); })
                     .then(function (data) {
-                        // Only ever update on a successful response - a failed poll
-                        // just keeps whatever was last shown, never blanks the HUD.
-                        hudBalance.textContent = formatAmount(data.balance_wallet, data.balance_usd);
-
                         var isZero = Number(data.exposure_wallet) === 0;
+
                         if (!isZero) {
-                            if (pendingClearTimer) { clearTimeout(pendingClearTimer); pendingClearTimer = null; }
-                            hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
+                            // A bet just got placed - show immediately, no
+                            // hold needed (nothing to wait for yet).
+                            if (pendingRevealTimer) { clearTimeout(pendingRevealTimer); pendingRevealTimer = null; }
+                            showResult(data);
                             exposureShowingNonZero = true;
                             exposureShownAt = Date.now();
+                            balanceAtBetTime = Number(data.balance_wallet);
                         } else if (exposureShowingNonZero) {
-                            var remaining = Math.max(0, MIN_EXPOSURE_HOLD_MS - (Date.now() - exposureShownAt));
-                            if (pendingClearTimer) { clearTimeout(pendingClearTimer); }
-                            pendingClearTimer = setTimeout(function () {
-                                hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
+                            // The round just resolved - hold the reveal
+                            // long enough for a win's animation (or just
+                            // MIN_EXPOSURE_HOLD_MS for a loss, which has no
+                            // animation to wait for).
+                            var isWin = balanceAtBetTime !== null && Number(data.balance_wallet) > balanceAtBetTime;
+                            var minHold = isWin ? WIN_REVEAL_DELAY_MS : MIN_EXPOSURE_HOLD_MS;
+                            var remaining = Math.max(0, minHold - (Date.now() - exposureShownAt));
+                            if (pendingRevealTimer) { clearTimeout(pendingRevealTimer); }
+                            pendingRevealTimer = setTimeout(function () {
+                                showResult(data);
                                 exposureShowingNonZero = false;
-                                pendingClearTimer = null;
+                                pendingRevealTimer = null;
                             }, remaining);
+                        } else if (!pendingRevealTimer) {
+                            // Already settled and staying settled (e.g. a
+                            // balance-only refresh between rounds) - safe
+                            // to update immediately, nothing being held back.
+                            hudBalance.textContent = formatAmount(data.balance_wallet, data.balance_usd);
                         }
                     })
                     .catch(function () { /* keep last known values on screen */ });
