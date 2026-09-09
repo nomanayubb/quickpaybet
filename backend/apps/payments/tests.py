@@ -101,3 +101,30 @@ class PkrWithdrawalTests(TestCase):
         self.assertEqual(payment.status, CryptoPayment.Status.FAILED)
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, Decimal('5000.00'))  # fully refunded in PKR, not left short
+
+
+class PaymentWebhookThrottleTests(TestCase):
+    """
+    apps.payments.views.PaymentWebhookView must never be subject to the
+    project-wide anonymous rate limit (100/hour per IP) - a real webhook
+    endpoint receiving legitimate high-volume traffic from a trusted
+    third party (NOWPayments retries, or - the case that surfaced this -
+    apps.casino's own Waija callbacks, which send a balance query plus a
+    debit/credit per spin) would otherwise start silently dropping real
+    financial events once the limit trips. Caught live via ngrok's request
+    log, 2026-09-09: Waija's own balance callback got a 429 mid-session.
+    Security on this endpoint is the HMAC signature check, not public
+    rate-limiting, so throttle_classes = [] is correct, not a loophole.
+    """
+
+    def test_survives_far_more_than_the_project_wide_anon_throttle_limit(self):
+        from django.urls import reverse
+
+        # An invalid signature is fine for this test - the only thing
+        # being proven is that none of these 150 calls (well over the
+        # 100/hour anon limit that would otherwise apply) come back 429.
+        for _ in range(150):
+            response = self.client.post(
+                reverse('payments:payment-webhook'), data='{}', content_type='application/json',
+            )
+            self.assertNotEqual(response.status_code, 429)

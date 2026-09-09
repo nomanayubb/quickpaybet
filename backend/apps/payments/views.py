@@ -9,7 +9,22 @@ from .services import handle_deposit_success
 
 
 class PaymentWebhookView(APIView):
+    """
+    NOWPayments IPN endpoint - authenticated by its own HMAC signature
+    (verify_webhook below), not by the caller's identity, so it's public
+    (AllowAny) by design.
+
+    throttle_classes = [] - the project-wide anonymous rate limit
+    (100/hour per IP, DEFAULT_THROTTLE_CLASSES in settings.py) would apply
+    here by default since this view has no explicit override, exactly the
+    bug caught live on apps.casino's own webhook views (see their
+    docstrings, 2026-09-09) - NOWPayments retries a failed/pending IPN
+    delivery, and under real deposit/withdrawal volume this could start
+    silently dropping legitimate webhook calls. Security here is the HMAC
+    signature check, not public rate-limiting.
+    """
     permission_classes = [AllowAny]
+    throttle_classes = []
 
     def post(self, request):
         provider = get_payment_provider()

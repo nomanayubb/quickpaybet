@@ -346,6 +346,19 @@ class WaijaWalletCallbackViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'error': 2, 'balance': 0})
 
+    def test_survives_far_more_than_the_project_wide_anon_throttle_limit(self):
+        # DEFAULT_THROTTLE_RATES caps anonymous requests at 100/hour - a
+        # single real play session (a balance query plus a debit/credit
+        # per spin) blows past that in minutes, so this view must opt out
+        # of throttling entirely (throttle_classes = []). Caught live via
+        # ngrok's request log, 2026-09-09: Waija's own balance callback got
+        # a 429 mid-session. 150 calls here (comfortably over the 100/hour
+        # anon limit that would otherwise apply) must all still succeed.
+        for _ in range(150):
+            response = self.client.get('/api/casino/waija/callback/', self._signed_params(action='balance'))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['error'], 0)
+
 
 class PkrWalletCurrencyTests(TestCase):
     """

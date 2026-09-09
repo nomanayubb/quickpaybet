@@ -24,8 +24,20 @@ class CasinoCallbackView(APIView):
     outbound launch calls FROM this server TO the provider, not the
     reverse); the shared AES secret used to decrypt an encrypted callback
     body is what authenticates the request.
+
+    throttle_classes = [] - a real gameplay session naturally makes many
+    rapid calls here (a balance query plus a debit/credit per spin), so the
+    project-wide anonymous rate limit (100/hour per IP, from
+    DEFAULT_THROTTLE_CLASSES in settings.py) would throttle a normal
+    player's OWN provider within minutes of active play - confirmed live,
+    2026-09-09 (ngrok request log showed the provider's own callback
+    getting a 429 mid-session). Security here comes from the shared secret
+    verifying each request, not from public rate-limiting - the same
+    reasoning already applies to WaijaWalletCallbackView below and
+    apps.payments.views.PaymentWebhookView.
     """
     permission_classes = [AllowAny]
+    throttle_classes = []
 
     def post(self, request):
         provider = get_casino_provider()
@@ -73,8 +85,16 @@ class WaijaWalletCallbackView(APIView):
     and falls back to a JSON request body if a field is missing there,
     since the provider's own docs render the example payload as a JSON
     block without being fully explicit about which transport carries it.
+
+    throttle_classes = [] - see CasinoCallbackView's docstring. This is the
+    highest-volume endpoint in the whole integration (a balance query plus
+    a debit/credit per spin) - a single active play session trips the
+    project-wide 100/hour anonymous limit within minutes, silently
+    breaking every bet/win after that for the rest of the hour. Caught
+    live via ngrok's request log, 2026-09-09.
     """
     permission_classes = [AllowAny]
+    throttle_classes = []
 
     def get(self, request):
         provider = get_casino_provider()
