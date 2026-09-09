@@ -4,6 +4,7 @@
 {% block content %}
     <p><a href="{% if brand %}{% url 'web:casino_provider' brand.id %}{% else %}{% url 'web:casino_lobby' %}{% endif %}">&larr; Back to casino</a></p>
     <h1 style="margin:8px 0;">{{ game.name }}</h1>
+    {% include 'web/_casino_currency_banner.html' %}
 
     <div style="position:relative;width:100%;height:80vh;">
         <iframe

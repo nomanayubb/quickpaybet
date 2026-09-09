@@ -2904,9 +2904,32 @@ def bet_history_view(request):
 
 # --- Casino (SoftAPI / world-casino-api.com or Waija/SlotsGateway) --------
 
+def _casino_currency_context(user):
+    """
+    PKR-specific banner context (live rate, dual-currency balance, and the
+    disclaimer note - see templates/web/_casino_currency_banner.html) shown
+    across every casino page. Same live rate as the Wallet page
+    (apps.wallet.models.FxRateConfig) - a no-op for a USD user, since none
+    of this is relevant to them (the banner partial checks user_currency
+    and renders nothing otherwise).
+    """
+    if user.currency != 'PKR':
+        return {'user_currency': user.currency}
+    from apps.wallet.models import FxRateConfig
+    from apps.wallet.services import convert_wallet_currency_to_usd
+
+    wallet, _ = Wallet.objects.get_or_create(user=user)
+    return {
+        'user_currency': user.currency,
+        'usd_pkr_rate': FxRateConfig.get_solo().usd_pkr_rate,
+        'wallet_balance_pkr': wallet.balance,
+        'wallet_balance_usd': convert_wallet_currency_to_usd(user, wallet.balance),
+    }
+
+
 def _casino_common_context(request):
     from apps.casino.services import get_casino_provider
-    return {
+    context = {
         'casino_enabled': CasinoConfig.get_solo().is_enabled,
         # A true seamless-wallet provider (Waija) never takes a starting
         # balance at launch - the amount box only makes sense for a
@@ -2915,6 +2938,8 @@ def _casino_common_context(request):
         'casino_requires_amount': get_casino_provider().requires_upfront_balance,
         'active': 'casino',
     }
+    context.update(_casino_currency_context(request.user))
+    return context
 
 
 def _casino_lobby_context(request, extra=None):
@@ -3046,7 +3071,9 @@ def _render_casino_play(request, game, launch_url):
     """
     source_brand_id = request.POST.get('source_brand_id') or request.GET.get('source_brand_id')
     brand = CasinoBrand.objects.filter(pk=source_brand_id, is_active=True).first() if source_brand_id else None
-    return render(request, 'web/casino_play.html', {'game': game, 'brand': brand, 'launch_url': launch_url, 'active': 'casino'})
+    context = {'game': game, 'brand': brand, 'launch_url': launch_url, 'active': 'casino'}
+    context.update(_casino_currency_context(request.user))
+    return render(request, 'web/casino_play.html', context)
 
 
 def admin_casino_dashboard_view(request):

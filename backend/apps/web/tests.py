@@ -726,3 +726,36 @@ class SignupCountryCurrencyTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'valid country')
         self.assertFalse(get_user_model().objects.filter(email='badcountry@example.com').exists())
+
+
+class CasinoCurrencyBannerTests(TestCase):
+    """The PKR rate/balance/disclaimer banner shown across every casino page - see templates/web/_casino_currency_banner.html."""
+
+    def setUp(self):
+        from apps.wallet.models import FxRateConfig
+
+        FxRateConfig.objects.update_or_create(pk=1, defaults={'usd_pkr_rate': Decimal('280.0000')})
+        self.pkr_user = User.objects.create_user(email='casinobannerpkr@example.com', password='testpass123', currency='PKR')
+        deposit_funds(self.pkr_user, Decimal('53'))
+        self.usd_user = User.objects.create_user(email='casinobannerusd@example.com', password='testpass123', currency='USD')
+        deposit_funds(self.usd_user, Decimal('53'))
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True, game_count=1)
+
+    def test_pkr_user_sees_rate_and_dual_currency_balance(self):
+        self.client.force_login(self.pkr_user)
+        response = self.client.get(reverse('web:casino_lobby'))
+        self.assertContains(response, '1 USD = Rs 280.0000')
+        self.assertContains(response, 'Rs 53.00')
+        self.assertContains(response, '$0.19')  # 53 / 280 = 0.18928571..., quantized to 0.19
+        self.assertContains(response, 'settled in US Dollars')
+
+    def test_usd_user_sees_no_banner(self):
+        self.client.force_login(self.usd_user)
+        response = self.client.get(reverse('web:casino_lobby'))
+        self.assertNotContains(response, 'USD Rate:')
+        self.assertNotContains(response, 'settled in US Dollars')
+
+    def test_banner_also_shows_on_provider_page(self):
+        self.client.force_login(self.pkr_user)
+        response = self.client.get(reverse('web:casino_provider', args=[self.brand.id]))
+        self.assertContains(response, 'settled in US Dollars')

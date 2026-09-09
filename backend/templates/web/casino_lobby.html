@@ -2,6 +2,7 @@
 
 {% block content %}
     <h1>Casino</h1>
+    {% include 'web/_casino_currency_banner.html' %}
 
     {% if not casino_enabled %}
         <p class="error">The casino is currently disabled by the admin.</p>

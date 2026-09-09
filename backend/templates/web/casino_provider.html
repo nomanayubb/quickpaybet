@@ -3,6 +3,7 @@
 {% block content %}
     <h1>{{ brand.name }}</h1>
     <p><a href="{% url 'web:casino_lobby' %}">&larr; All providers</a></p>
+    {% include 'web/_casino_currency_banner.html' %}
 
     {% if not casino_enabled %}
         <p class="error">The casino is currently disabled by the admin.</p>
