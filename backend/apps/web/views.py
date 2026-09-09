@@ -3022,10 +3022,7 @@ def _render_casino_play(request, game, launch_url):
     """
     source_brand_id = request.POST.get('source_brand_id') or request.GET.get('source_brand_id')
     brand = CasinoBrand.objects.filter(pk=source_brand_id, is_active=True).first() if source_brand_id else None
-    exit_url = reverse('web:casino_provider', args=[brand.id]) if brand else reverse('web:casino_lobby')
-    return render(request, 'web/casino_play.html', {
-        'game': game, 'brand': brand, 'launch_url': launch_url, 'exit_url': exit_url, 'active': 'casino',
-    })
+    return render(request, 'web/casino_play.html', {'game': game, 'brand': brand, 'launch_url': launch_url, 'active': 'casino'})
 
 
 def admin_casino_dashboard_view(request):
