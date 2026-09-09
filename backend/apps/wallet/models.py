@@ -1,5 +1,55 @@
+from decimal import Decimal
+
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+
+
+class FxRateConfig(models.Model):
+    """
+    Singleton (same get_solo()/pk=1 pattern as apps.casino.models.CasinoConfig)
+    holding the single USD->PKR rate every PKR-currency user's deposits,
+    withdrawals, and balance conversions are computed against.
+
+    `usd_pkr_rate` is the number actually used everywhere - normally kept
+    fresh by apps.wallet.tasks.refresh_usd_pkr_rate (Celery beat, hourly,
+    see config/celery.py) pulling a live rate from an external FX API. If
+    that live fetch ever fails (API down, key missing, network error) the
+    task leaves this field untouched at its last known-good value rather
+    than zeroing it out or blocking deposits - `last_sync_error` records
+    what went wrong for an admin to see, but never blocks money movement.
+
+    `is_manual_override`, when turned on by an admin (Django admin site),
+    makes the refresh task skip the live fetch entirely and leaves this
+    rate exactly as the admin set it, indefinitely - an escape hatch if the
+    live source ever needs to be bypassed.
+    """
+    usd_pkr_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        default=Decimal('280.0000'),
+        validators=[MinValueValidator(Decimal('1.0000')), MaxValueValidator(Decimal('10000.0000'))],
+        verbose_name='USD -> PKR rate (used for every PKR-currency user\'s deposits/withdrawals/balance)',
+    )
+    is_manual_override = models.BooleanField(
+        default=False,
+        verbose_name='Manual override (when on, the hourly live-rate refresh is skipped and this rate is used as-is)',
+    )
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_sync_error = models.CharField(max_length=500, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'FX Rate Config'
+        verbose_name_plural = 'FX Rate Config'
+
+    def __str__(self):
+        return f'1 USD = {self.usd_pkr_rate} PKR ({"manual" if self.is_manual_override else "live"})'
+
+    @classmethod
+    def get_solo(cls) -> 'FxRateConfig':
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
 
 
 class Wallet(models.Model):

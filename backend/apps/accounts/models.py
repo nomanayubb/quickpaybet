@@ -15,8 +15,28 @@ class User(AbstractUser):
         MASTER = 'master', _('Master')
         ADMIN = 'admin', _('Admin')
 
+    class Currency(models.TextChoices):
+        USD = 'USD', _('USD')
+        PKR = 'PKR', _('PKR')
+
     username = None
     email = models.EmailField(_('email address'), unique=True)
+    country = models.CharField(
+        max_length=2,
+        blank=True,
+        default='',
+        verbose_name=_('Country (ISO code, collected at signup)'),
+    )
+    currency = models.CharField(
+        max_length=3,
+        choices=Currency.choices,
+        default=Currency.USD,
+        verbose_name=_(
+            'Wallet currency - derived from country at signup (PK -> PKR, everything else -> USD) '
+            'and never changed afterward; every deposit, withdrawal, bet, and balance for this user '
+            'is denominated in this currency.'
+        ),
+    )
     phone_number = models.CharField(
         _('Phone number'),
         max_length=20,

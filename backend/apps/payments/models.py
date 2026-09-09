@@ -19,6 +19,16 @@ class CryptoPayment(models.Model):
     )
     amount = models.DecimalField(max_digits=20, decimal_places=8)
     currency = models.CharField(max_length=20, default='USDT')
+    wallet_amount = models.DecimalField(
+        max_digits=20, decimal_places=8, null=True, blank=True,
+        verbose_name='Amount actually credited/debited on the wallet, in wallet_currency '
+                     '(equals `amount` for a USD wallet; converted via fx_rate_applied for a PKR wallet)',
+    )
+    wallet_currency = models.CharField(max_length=3, default='USD')
+    fx_rate_applied = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        verbose_name='USD -> wallet_currency rate snapshotted at request time (1.0000 for a USD wallet)',
+    )
     payment_type = models.CharField(
         max_length=20,
         choices=PaymentType.choices,

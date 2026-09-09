@@ -4,7 +4,27 @@ import uuid
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from .models import Wallet, WalletTransaction
+from .models import FxRateConfig, Wallet, WalletTransaction
+
+
+def convert_usd_to_wallet_currency(user, usd_amount: Decimal) -> tuple[Decimal, str, Decimal]:
+    """
+    Converts a USD amount (what the crypto payment provider always prices in
+    - see apps.payments.providers.NOWPaymentsProvider, which has no PKR rail)
+    into the given user's own wallet currency, using the live-refreshed rate
+    on FxRateConfig (apps.wallet.tasks.refresh_usd_pkr_rate, hourly).
+
+    Returns (wallet_amount, wallet_currency, fx_rate_applied) - the rate is
+    always returned even for a USD user (1.0000) so callers can snapshot it
+    onto a record uniformly, the same "snapshot, don't reference" discipline
+    apps.casino.models.CasinoSession already uses for its own provider-
+    currency conversion.
+    """
+    if user.currency == 'PKR':
+        rate = FxRateConfig.get_solo().usd_pkr_rate
+        wallet_amount = (usd_amount * rate).quantize(Decimal('0.01'))
+        return wallet_amount, 'PKR', rate
+    return usd_amount, 'USD', Decimal('1.0000')
 
 
 def deposit_funds(user, amount: Decimal, description: str = 'Crypto deposit'):

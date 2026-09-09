@@ -29,4 +29,8 @@ app.conf.beat_schedule = {
         'task': 'apps.common.tasks.run_database_backup',
         'schedule': crontab(hour=3, minute=0),
     },
+    'refresh-fx-rate': {
+        'task': 'apps.wallet.tasks.refresh_usd_pkr_rate',
+        'schedule': crontab(minute=0),
+    },
 }

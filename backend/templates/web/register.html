@@ -2,6 +2,7 @@
 
 {% block content %}
     <h1>Register</h1>
+    {% if error %}<p style="color:#b00020;">{{ error }}</p>{% endif %}
     <form method="post">
         {% csrf_token %}
         <div class="form-group">
@@ -13,6 +14,19 @@
             <input type="tel" name="phone_number">
         </div>
         <div class="form-group">
+            <label>Country</label>
+            <select name="country" id="id_country" required>
+                <option value="">Select your country</option>
+                {% for code, name in countries %}
+                    <option value="{{ code }}">{{ name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group" id="currency-display-group">
+            <label>Currency</label>
+            <p id="currency-display" style="margin:4px 0;color:#555;">Select a country first</p>
+        </div>
+        <div class="form-group">
             <label>Password</label>
             <input type="password" name="password1" required>
         </div>
@@ -22,4 +36,20 @@
         </div>
         <button type="submit" class="btn">Register</button>
     </form>
+    <script>
+        (function () {
+            var countrySelect = document.getElementById('id_country');
+            var currencyDisplay = document.getElementById('currency-display');
+            function updateCurrency() {
+                if (!countrySelect.value) {
+                    currencyDisplay.textContent = 'Select a country first';
+                    return;
+                }
+                var currency = countrySelect.value === 'PK' ? 'PKR' : 'USD';
+                currencyDisplay.textContent = currency + ' (set automatically from your country, cannot be changed)';
+            }
+            countrySelect.addEventListener('change', updateCurrency);
+            updateCurrency();
+        })();
+    </script>
 {% endblock %}

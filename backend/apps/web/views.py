@@ -21,6 +21,7 @@ from django.conf import settings
 from decimal import Decimal, InvalidOperation
 
 from apps.common.middleware import PAKISTAN_TZ
+from apps.common.constants import COUNTRY_CHOICES
 from apps.accounts.models import User, PasswordResetToken
 from apps.accounts.permissions import roles_assignable_by, user_can_manage_target
 from apps.audit.models import AuditLog
@@ -2140,31 +2141,46 @@ def register_view(request):
         phone_number = request.POST.get('phone_number', '').strip()
         password = request.POST.get('password1', '')
         password2 = request.POST.get('password2', '')
+        country = request.POST.get('country', '').strip().upper()
 
         if not email:
             return render(
                 request,
                 'web/register.html',
-                {'error': 'Email is required.'},
+                {'error': 'Email is required.', 'countries': COUNTRY_CHOICES},
             )
         if password != password2:
             return render(
                 request,
                 'web/register.html',
-                {'error': 'Passwords do not match.'},
+                {'error': 'Passwords do not match.', 'countries': COUNTRY_CHOICES},
             )
         if User.objects.filter(email=email).exists():
             return render(
                 request,
                 'web/register.html',
-                {'error': 'User with this email already exists.'},
+                {'error': 'User with this email already exists.', 'countries': COUNTRY_CHOICES},
+            )
+        if country not in dict(COUNTRY_CHOICES):
+            return render(
+                request,
+                'web/register.html',
+                {'error': 'Please select a valid country.', 'countries': COUNTRY_CHOICES},
             )
 
-        user = User.objects.create_user(email=email, password=password, phone_number=phone_number)
+        # Currency is derived server-side from country, never trusted from
+        # the client (a hidden form field can be tampered with) - Pakistan
+        # gets PKR, everything else USD. See apps.accounts.models.User.currency.
+        currency = User.Currency.PKR if country == 'PK' else User.Currency.USD
+
+        user = User.objects.create_user(
+            email=email, password=password, phone_number=phone_number,
+            country=country, currency=currency,
+        )
         auth_login(request, user)
         return redirect('web:home')
 
-    return render(request, 'web/register.html')
+    return render(request, 'web/register.html', {'countries': COUNTRY_CHOICES})
 
 
 def login_view(request):
@@ -2681,6 +2697,7 @@ def parlay_history_view(request):
 
 def _wallet_context(user, extra=None):
     from apps.rewards.services import get_lifetime_deposit_total
+    from apps.wallet.models import FxRateConfig
 
     wallet, _ = Wallet.objects.get_or_create(user=user)
     transactions = WalletTransaction.objects.filter(wallet=wallet).select_related('wallet')
@@ -2705,6 +2722,12 @@ def _wallet_context(user, extra=None):
         'reward_packages': reward_packages,
         'lifetime_deposits': lifetime_deposits,
         'active': 'wallet',
+        'user_currency': user.currency,
+        # Deposits/withdrawals are always entered/priced in USD (NOWPayments
+        # has no PKR rail - see apps.wallet.services.convert_usd_to_wallet_currency)
+        # regardless of the user's own wallet currency; this rate drives the
+        # live "you'll receive ~Rs X" preview shown to a PKR user in the form.
+        'usd_pkr_rate': FxRateConfig.get_solo().usd_pkr_rate if user.currency == 'PKR' else None,
         # The self-confirm button must only ever be usable when the mock
         # provider is active (local/dev). It is never shown against a real
         # payment provider — deposits there are only ever confirmed by a

@@ -684,3 +684,45 @@ class CasinoBrowsingTests(TestCase):
         response = self.client.get(reverse('web:casino_lobby'), {'q': 'Diamond'})
         self.assertContains(response, 'Diamond Rush')  # game name match
         self.assertNotContains(response, 'Lightning Roulette')
+
+
+class SignupCountryCurrencyTests(TestCase):
+    def test_pakistan_signup_gets_pkr_currency(self):
+        response = self.client.post(reverse('web:register'), {
+            'email': 'pkuser@example.com', 'password1': 'testpass123', 'password2': 'testpass123',
+            'country': 'PK',
+        })
+        self.assertEqual(response.status_code, 302)
+        user = get_user_model().objects.get(email='pkuser@example.com')
+        self.assertEqual(user.country, 'PK')
+        self.assertEqual(user.currency, 'PKR')
+
+    def test_other_country_signup_gets_usd_currency(self):
+        response = self.client.post(reverse('web:register'), {
+            'email': 'ususer@example.com', 'password1': 'testpass123', 'password2': 'testpass123',
+            'country': 'US',
+        })
+        self.assertEqual(response.status_code, 302)
+        user = get_user_model().objects.get(email='ususer@example.com')
+        self.assertEqual(user.country, 'US')
+        self.assertEqual(user.currency, 'USD')
+
+    def test_client_cannot_smuggle_a_currency_value(self):
+        # currency is derived server-side from country only - even if a
+        # tampered request tries to pass its own currency, it must be ignored.
+        response = self.client.post(reverse('web:register'), {
+            'email': 'sneaky@example.com', 'password1': 'testpass123', 'password2': 'testpass123',
+            'country': 'US', 'currency': 'PKR',
+        })
+        self.assertEqual(response.status_code, 302)
+        user = get_user_model().objects.get(email='sneaky@example.com')
+        self.assertEqual(user.currency, 'USD')  # country US -> USD, the smuggled 'PKR' is ignored
+
+    def test_invalid_country_rejected(self):
+        response = self.client.post(reverse('web:register'), {
+            'email': 'badcountry@example.com', 'password1': 'testpass123', 'password2': 'testpass123',
+            'country': 'ZZ',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'valid country')
+        self.assertFalse(get_user_model().objects.filter(email='badcountry@example.com').exists())

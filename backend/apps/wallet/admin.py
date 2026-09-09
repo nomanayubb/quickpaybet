@@ -1,6 +1,18 @@
 from django.contrib import admin
 
-from .models import Wallet, WalletTransaction
+from .models import FxRateConfig, Wallet, WalletTransaction
+
+
+@admin.register(FxRateConfig)
+class FxRateConfigAdmin(admin.ModelAdmin):
+    list_display = ('usd_pkr_rate', 'is_manual_override', 'last_synced_at', 'last_sync_error', 'updated_at')
+    readonly_fields = ('last_synced_at', 'last_sync_error', 'updated_at')
+
+    def has_add_permission(self, request):
+        return not FxRateConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Wallet)

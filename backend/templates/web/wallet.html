@@ -4,7 +4,7 @@
     <h1>Your Wallet</h1>
     <div class="wallet-balance">
         {{ wallet.available_balance|floatformat:2 }}
-        <span style="font-size:16px; color:#666;">available USDT</span>
+        <span style="font-size:16px; color:#666;">available {{ user_currency }}</span>
     </div>
     {% if wallet.reserved_balance %}
         <div class="stat-card">
@@ -29,7 +29,8 @@
         <h3>Pending Deposits</h3>
         {% for deposit in pending_deposits %}
             <div class="pending-deposit">
-                <strong>{{ deposit.amount }} {{ deposit.currency }}</strong><br>
+                <strong>{{ deposit.amount }} {{ deposit.currency }}</strong>
+                {% if deposit.wallet_currency == 'PKR' %}(≈ Rs {{ deposit.wallet_amount|floatformat:2 }} on confirmation){% endif %}<br>
                 Address: <code>{{ deposit.address }}</code><br>
                 External ID: <code>{{ deposit.external_id }}</code><br>
                 Awaiting payment confirmation.
@@ -46,17 +47,44 @@
     <h3>Deposit</h3>
     <form method="post" action="{% url 'web:wallet_deposit' %}">
         {% csrf_token %}
-        <input type="number" name="amount" step="0.0001" min="0" placeholder="Amount" required>
+        <input type="number" name="amount" id="deposit-amount" step="0.0001" min="0"
+               placeholder="{% if user_currency == 'PKR' %}Amount (USD){% else %}Amount{% endif %}" required>
+        {% if user_currency == 'PKR' %}
+            <p id="deposit-preview" style="margin:6px 0;color:#555;">You'll receive ≈ Rs 0.00 in your wallet</p>
+        {% endif %}
         <button type="submit" class="btn">Request Deposit</button>
     </form>
 
     <h3>Withdraw</h3>
     <form method="post" action="{% url 'web:wallet_withdraw' %}">
         {% csrf_token %}
-        <input type="number" name="amount" step="0.0001" min="0" placeholder="Amount" required>
+        <input type="number" name="amount" id="withdraw-amount" step="0.0001" min="0"
+               placeholder="{% if user_currency == 'PKR' %}Amount (USD){% else %}Amount{% endif %}" required>
+        {% if user_currency == 'PKR' %}
+            <p id="withdraw-preview" style="margin:6px 0;color:#555;">Rs 0.00 will be debited from your wallet</p>
+        {% endif %}
         <input type="text" name="address" placeholder="Crypto address" required>
         <button type="submit" class="btn">Withdraw</button>
     </form>
+    {% if user_currency == 'PKR' %}
+        <script>
+            (function () {
+                var rate = {{ usd_pkr_rate }};
+                function wire(inputId, previewId, label) {
+                    var input = document.getElementById(inputId);
+                    var preview = document.getElementById(previewId);
+                    if (!input || !preview) { return; }
+                    input.addEventListener('input', function () {
+                        var usd = parseFloat(input.value) || 0;
+                        var pkr = (usd * rate).toFixed(2);
+                        preview.textContent = label.replace('{amount}', pkr);
+                    });
+                }
+                wire('deposit-amount', 'deposit-preview', "You'll receive ≈ Rs {amount} in your wallet");
+                wire('withdraw-amount', 'withdraw-preview', 'Rs {amount} will be debited from your wallet');
+            })();
+        </script>
+    {% endif %}
 
     <h3>Transaction History</h3>
     <table>
@@ -67,7 +95,7 @@
             {% for txn in transactions %}
                 <tr>
                     <td>{{ txn.txn_type }}</td>
-                    <td>{{ txn.amount }}</td>
+                    <td>{{ txn.amount }} {{ user_currency }}</td>
                     <td>{{ txn.status }}</td>
                     <td>{{ txn.created_at }}</td>
                     <td>{{ txn.description|default:"" }}</td>

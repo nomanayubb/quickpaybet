@@ -6,7 +6,7 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 from apps.rewards.services import apply_reward_packages
-from apps.wallet.services import deposit_funds, withdraw_funds
+from apps.wallet.services import convert_usd_to_wallet_currency, deposit_funds, withdraw_funds
 
 from .models import CryptoPayment
 from .providers import get_payment_provider
@@ -16,6 +16,14 @@ def create_deposit(user, amount: Decimal, currency: str = 'USDT', provider: str 
     """
     Asks the configured payment provider for a deposit address,
     stores a PENDING CryptoPayment, and returns that record.
+
+    `amount` is always USD - NOWPayments has no PKR rail, so the crypto
+    invoice underneath is always priced in USD regardless of the user's own
+    wallet currency (see apps.payments.providers.NOWPaymentsProvider). What
+    actually lands in the wallet on success is `wallet_amount` in
+    `wallet_currency` (see convert_usd_to_wallet_currency) - for a PKR user
+    this is the live-converted PKR figure; for a USD user it's identical to
+    `amount`.
     """
     if amount <= 0:
         raise ValidationError('Amount must be positive.')
@@ -34,10 +42,15 @@ def create_deposit(user, amount: Decimal, currency: str = 'USDT', provider: str 
     external_id = provider_result.get('external_id', '')
     address = provider_result.get('address', '')
 
+    wallet_amount, wallet_currency, fx_rate_applied = convert_usd_to_wallet_currency(user, amount)
+
     return CryptoPayment.objects.create(
         user=user,
         amount=amount,
         currency=currency,
+        wallet_amount=wallet_amount,
+        wallet_currency=wallet_currency,
+        fx_rate_applied=fx_rate_applied,
         payment_type=CryptoPayment.PaymentType.DEPOSIT,
         status=CryptoPayment.Status.PENDING,
         provider=provider_result.get('provider', provider_obj.name),
@@ -56,6 +69,12 @@ def create_withdrawal_request(user, amount: Decimal, address: str, currency: str
     If the provider call fails, the wallet debit is reversed (refunded) and
     the payment is marked failed — the user's balance must never be reduced
     for a withdrawal that was never actually handed to a payment provider.
+
+    `amount` is always USD/crypto-quantity - it's what actually gets sent to
+    NOWPayments' payout API (no PKR rail there either). The wallet itself is
+    debited `wallet_amount` in the user's own `wallet_currency` (converted
+    via convert_usd_to_wallet_currency) so a PKR user's balance moves by the
+    right PKR figure even though the payout underneath is still USD/crypto.
     """
     if amount <= 0:
         raise ValidationError('Amount must be positive.')
@@ -63,11 +82,12 @@ def create_withdrawal_request(user, amount: Decimal, address: str, currency: str
         raise ValidationError('Withdrawal address is required.')
 
     external_id = f"wd_{uuid.uuid4().hex}"
+    wallet_amount, wallet_currency, fx_rate_applied = convert_usd_to_wallet_currency(user, amount)
 
     with transaction.atomic():
         txn = withdraw_funds(
             user=user,
-            amount=amount,
+            amount=wallet_amount,
             description=f'Crypto withdrawal to {address} via {currency}',
         )
 
@@ -75,6 +95,9 @@ def create_withdrawal_request(user, amount: Decimal, address: str, currency: str
             user=user,
             amount=amount,
             currency=currency,
+            wallet_amount=wallet_amount,
+            wallet_currency=wallet_currency,
+            fx_rate_applied=fx_rate_applied,
             payment_type=CryptoPayment.PaymentType.WITHDRAWAL,
             status=CryptoPayment.Status.PENDING,
             provider=os.getenv('PAYMENT_PROVIDER', 'mock').lower(),
@@ -98,7 +121,7 @@ def create_withdrawal_request(user, amount: Decimal, address: str, currency: str
         with transaction.atomic():
             deposit_funds(
                 user=user,
-                amount=amount,
+                amount=wallet_amount,
                 description=f'Withdrawal refund – provider error ({payment.external_id})',
             )
             payment.status = CryptoPayment.Status.FAILED
@@ -234,7 +257,7 @@ def handle_deposit_success(external_id: str) -> CryptoPayment:
     with transaction.atomic():
         txn = deposit_funds(
             user=payment.user,
-            amount=payment.amount,
+            amount=payment.wallet_amount if payment.wallet_amount is not None else payment.amount,
             description=f"Crypto deposit confirmed ({payment.external_id})"
         )
         apply_reward_packages(payment.user, txn.wallet)
