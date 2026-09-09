@@ -1,0 +1,54 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Casino</h1>
+    <p>
+        <a class="btn" href="{% url 'web:admin_casino_providers' %}">Providers</a>
+        <a class="btn" href="{% url 'web:admin_casino_games' %}">Games</a>
+        <a class="btn" href="{% url 'web:admin_casino_sessions' %}">Sessions</a>
+    </p>
+
+    <h2>Overview</h2>
+    <table>
+        <tbody>
+            <tr><td>Open sessions</td><td>{{ stats.open_sessions }}</td></tr>
+            <tr><td>Total sessions (all time)</td><td>{{ stats.total_sessions }}</td></tr>
+            <tr><td>Total wagered (USD, all time)</td><td>{{ stats.total_wagered_usd }}</td></tr>
+            <tr><td>Total won by players (USD, all time)</td><td>{{ stats.total_won_usd }}</td></tr>
+            <tr><td>Active games</td><td>{{ stats.active_games }}</td></tr>
+            <tr><td>Active providers</td><td>{{ stats.active_brands }}</td></tr>
+            <tr>
+                <td>GGR wallet balance (SoftAPI billing account)</td>
+                <td>
+                    {% if ggr_error %}
+                        <span class="error">Unavailable: {{ ggr_error }}</span>
+                    {% else %}
+                        {{ ggr_balance }}
+                    {% endif %}
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2 style="margin-top:32px;">Settings</h2>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label><input type="checkbox" name="is_enabled" {% if config.is_enabled %}checked{% endif %}> Casino enabled (players can launch real-money games)</label>
+        </div>
+        <div class="form-group">
+            <label>Max balance (USD) per game launch</label>
+            <input type="number" name="max_launch_balance" step="0.01" min="1.00" max="100000.00" value="{{ config.max_launch_balance }}">
+        </div>
+        <div class="form-group">
+            <label>Provider currency code (must match what the SoftAPI account actually supports)</label>
+            <input type="text" name="provider_currency_code" maxlength="10" value="{{ config.provider_currency_code }}">
+        </div>
+        <div class="form-group">
+            <label>USD → provider currency conversion rate (1.0000 if the provider currency is USD)</label>
+            <input type="number" name="usd_to_provider_currency_rate" step="0.0001" min="0.0001" max="10000.0000" value="{{ config.usd_to_provider_currency_rate }}">
+        </div>
+        <button type="submit" class="btn">Save settings</button>
+    </form>
+{% endblock %}

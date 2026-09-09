@@ -1,0 +1,28 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Casino Providers</h1>
+    <p><a href="{% url 'web:admin_casino' %}">← Back to Casino dashboard</a></p>
+
+    <form method="post">
+        {% csrf_token %}
+        <table>
+            <thead><tr><th></th><th>Name</th><th>Brand ID</th><th>Games</th><th>Active</th></tr></thead>
+            <tbody>
+                {% for b in brands %}
+                    <tr>
+                        <td><input type="checkbox" name="brand_ids" value="{{ b.id }}"></td>
+                        <td>{{ b.name }}</td>
+                        <td>{{ b.brand_id }}</td>
+                        <td>{{ b.game_count }}</td>
+                        <td>{{ b.is_active|yesno:"Yes,No" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="5">No providers synced yet - run the sync_casino_catalog management command.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button type="submit" name="action" value="enable" class="btn">Enable selected</button>
+        <button type="submit" name="action" value="disable" class="btn">Disable selected</button>
+    </form>
+{% endblock %}

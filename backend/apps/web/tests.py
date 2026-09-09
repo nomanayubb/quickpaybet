@@ -12,6 +12,8 @@ from openpyxl import load_workbook
 from apps.audit.models import AuditLog
 from apps.bets.models import Bet
 from apps.bets.services import place_bet
+from apps.casino.models import CasinoBrand, CasinoConfig, CasinoGame
+from apps.casino.providers import MockCasinoProvider
 from apps.cashback.models import CashbackCredit
 from apps.exchange.models import ExchangeFill, ExchangeOrder
 from apps.payments.models import CryptoPayment
@@ -146,6 +148,56 @@ class LedgerExportTests(ExcelExportTestsBase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][1], 'deposit')
         self.assertEqual(rows[0][7], 'ledgertest-1')
+
+
+class CasinoLedgerHistoryTests(ExcelExportTestsBase):
+    """The per-user Ledger page's Casino History section - shows which game/provider a win or loss happened on."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.casino.services import handle_waija_wallet_event
+
+        self.target = User.objects.create_user(email='casinoledgertarget@example.com', password='testpass123')
+        Wallet.objects.get_or_create(user=self.target)
+        deposit_funds(self.target, Decimal('100'))
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=1, game_uid='pragmaticslots/gatesofolympus', brand=self.brand, name='Gates of Olympus', is_active=True,
+        )
+        username = f'qpb{self.target.id}'
+        handle_waija_wallet_event(
+            username=username, action='debit', amount=Decimal('5.00'), call_id='ledger-call-1',
+            round_id='round-1', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        handle_waija_wallet_event(
+            username=username, action='credit', amount=Decimal('12.50'), call_id='ledger-call-2',
+            round_id='round-1', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+
+    def test_ledger_page_shows_game_and_provider_name(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('web:admin_user_ledger', args=[self.target.id]))
+        self.assertContains(response, 'Gates of Olympus')
+        self.assertContains(response, 'Pragmatic Play')
+
+    def test_casino_xlsx_export_includes_win_and_loss_rows(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse('web:admin_user_ledger', args=[self.target.id]), {'export': 'casino_xlsx'},
+        )
+        header, rows = _read_xlsx_rows(response)
+        self.assertEqual(len(rows), 2)
+        by_action = {row[2]: row for row in rows}
+        self.assertEqual(by_action['debit'][1], 'Gates of Olympus (Pragmatic Play)')
+        self.assertEqual(by_action['debit'][3], '5.00000000')
+        self.assertEqual(by_action['credit'][3], '12.50000000')
+
+    def test_search_filters_by_game_name(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse('web:admin_user_ledger', args=[self.target.id]), {'casino_q': 'nonexistent-game'},
+        )
+        self.assertContains(response, 'No casino activity matches this search.')
 
 
 class ExchangeExportTests(ExcelExportTestsBase):
@@ -569,3 +621,66 @@ class AdminOddsAdjustmentViewTests(TestCase):
         response = self.client.get(reverse('web:admin_odds_adjustment'))
         self.assertFalse(response.context['global_is_default'])
         self.assertContains(response, 'Non-default global settings active')
+
+
+class CasinoLaunchRedirectTests(TestCase):
+    """
+    Confirms casino_launch_view embeds the provider's returned URL in an
+    iframe on our own page rather than redirecting the player's top-level
+    tab there - per Waija's own docs ("open in an iframe or a new window")
+    and confirmed with their support as what avoids a provider's own
+    branded loading splash, with no server-side setting needed for it.
+    """
+
+    def setUp(self):
+        CasinoConfig.objects.filter(pk=1).delete()
+        self.config = CasinoConfig.objects.create(pk=1, is_enabled=True, max_launch_balance=Decimal('100.00'))
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=737, game_uid='737', brand=self.brand, name='Aviator', category='slots', is_active=True,
+        )
+        self.user = User.objects.create_user(email='casinolaunchuser@example.com', password='testpass123')
+        deposit_funds(self.user, Decimal('1000'))
+        self.client.force_login(self.user)
+
+    def test_launch_embeds_provider_url_in_iframe(self):
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.post(reverse('web:casino_launch', args=[self.game.id]), {'amount': '10'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<iframe')
+        self.assertContains(response, 'https://mock-casino.local/play')
+
+
+class CasinoBrowsingTests(TestCase):
+    """Providers-first browsing: the lobby shows provider cards by default, a provider's own page never shows another provider's games, and search covers both."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(email='casinobrowseuser@example.com', password='testpass123')
+        self.client.force_login(self.user)
+        self.brand_a = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True, game_count=1)
+        self.brand_b = CasinoBrand.objects.create(brand_id=2, name='Evolution Live', is_active=True, game_count=1)
+        self.game_a = CasinoGame.objects.create(
+            game_id=1, game_uid='pragmaticslots/aviator-clone', brand=self.brand_a, name='Diamond Rush', is_active=True,
+        )
+        self.game_b = CasinoGame.objects.create(
+            game_id=2, game_uid='evolution/roulette', brand=self.brand_b, name='Lightning Roulette', is_active=True,
+        )
+
+    def test_lobby_shows_provider_cards_not_games_by_default(self):
+        response = self.client.get(reverse('web:casino_lobby'))
+        self.assertContains(response, 'Pragmatic Play')
+        self.assertContains(response, 'Evolution Live')
+        self.assertNotContains(response, 'Diamond Rush')
+        self.assertNotContains(response, 'Lightning Roulette')
+
+    def test_provider_page_only_shows_that_providers_games(self):
+        response = self.client.get(reverse('web:casino_provider', args=[self.brand_a.id]))
+        self.assertContains(response, 'Diamond Rush')
+        self.assertNotContains(response, 'Lightning Roulette')  # never mixed in from another provider
+
+    def test_search_finds_both_matching_providers_and_games(self):
+        response = self.client.get(reverse('web:casino_lobby'), {'q': 'Evolution'})
+        self.assertContains(response, 'Evolution Live')  # provider name match
+        response = self.client.get(reverse('web:casino_lobby'), {'q': 'Diamond'})
+        self.assertContains(response, 'Diamond Rush')  # game name match
+        self.assertNotContains(response, 'Lightning Roulette')

@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'apps.bets',
     'apps.exchange',
     'apps.cashback',
+    'apps.casino',
     'apps.rewards',
     'apps.reports',
     'apps.payments',

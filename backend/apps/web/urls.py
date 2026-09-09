@@ -23,6 +23,10 @@ from .views import (
     admin_cashback_dashboard_view,
     admin_pricing_overrides_view,
     admin_odds_adjustment_view,
+    admin_casino_dashboard_view,
+    admin_casino_providers_view,
+    admin_casino_games_view,
+    admin_casino_sessions_view,
     admin_rewards_view,
     admin_create_reward_view,
     admin_edit_reward_view,
@@ -49,6 +53,10 @@ from .views import (
     exchange_cash_out_view,
     exchange_cash_out_preview_view,
     exchange_history_view,
+    casino_lobby_view,
+    casino_provider_view,
+    casino_launch_view,
+    casino_demo_view,
 )
 
 app_name = 'web'
@@ -97,6 +105,10 @@ urlpatterns = [
     path('panel/cashback/', admin_cashback_dashboard_view, name='admin_cashback'),
     path('panel/pricing-overrides/', admin_pricing_overrides_view, name='admin_pricing_overrides'),
     path('panel/odds-adjustment/', admin_odds_adjustment_view, name='admin_odds_adjustment'),
+    path('panel/casino/', admin_casino_dashboard_view, name='admin_casino'),
+    path('panel/casino/providers/', admin_casino_providers_view, name='admin_casino_providers'),
+    path('panel/casino/games/', admin_casino_games_view, name='admin_casino_games'),
+    path('panel/casino/sessions/', admin_casino_sessions_view, name='admin_casino_sessions'),
     path('panel/rewards/', admin_rewards_view, name='admin_rewards'),
     path('panel/rewards/create/', admin_create_reward_view, name='admin_create_reward'),
     path('panel/rewards/<int:package_id>/edit/', admin_edit_reward_view, name='admin_edit_reward'),
@@ -109,4 +121,8 @@ urlpatterns = [
     path('wallet/withdraw/', wallet_withdraw_view, name='wallet_withdraw'),
     path('wallet/confirm-deposit/<int:deposit_id>/', confirm_deposit_view, name='confirm_deposit'),
     path('bets/', bet_history_view, name='bets'),
+    path('casino/', casino_lobby_view, name='casino_lobby'),
+    path('casino/provider/<int:brand_id>/', casino_provider_view, name='casino_provider'),
+    path('casino/<int:game_id>/launch/', casino_launch_view, name='casino_launch'),
+    path('casino/<int:game_id>/demo/', casino_demo_view, name='casino_demo'),
 ]

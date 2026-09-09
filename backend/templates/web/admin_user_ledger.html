@@ -9,6 +9,9 @@
         <input type="hidden" name="pay_q" value="{{ pay_q }}">
         <input type="hidden" name="pay_date_from" value="{{ pay_date_from }}">
         <input type="hidden" name="pay_date_to" value="{{ pay_date_to }}">
+        <input type="hidden" name="casino_q" value="{{ casino_q }}">
+        <input type="hidden" name="casino_date_from" value="{{ casino_date_from }}">
+        <input type="hidden" name="casino_date_to" value="{{ casino_date_to }}">
         <input type="text" name="bet_q" value="{{ bet_q }}" placeholder="Search by team name">
         From <input type="datetime-local" name="bet_date_from" value="{{ bet_date_from }}">
         To <input type="datetime-local" name="bet_date_to" value="{{ bet_date_to }}">
@@ -60,6 +63,9 @@
         <input type="hidden" name="bet_q" value="{{ bet_q }}">
         <input type="hidden" name="bet_date_from" value="{{ bet_date_from }}">
         <input type="hidden" name="bet_date_to" value="{{ bet_date_to }}">
+        <input type="hidden" name="casino_q" value="{{ casino_q }}">
+        <input type="hidden" name="casino_date_from" value="{{ casino_date_from }}">
+        <input type="hidden" name="casino_date_to" value="{{ casino_date_to }}">
         <input type="text" name="pay_q" value="{{ pay_q }}" placeholder="Search by address / currency / ID">
         From <input type="datetime-local" name="pay_date_from" value="{{ pay_date_from }}">
         To <input type="datetime-local" name="pay_date_to" value="{{ pay_date_to }}">
@@ -103,6 +109,60 @@
             {% if payments_page.has_previous %}<a class="btn" href="?pay_page={{ payments_page.previous_page_number }}&pay_q={{ pay_q }}&pay_date_from={{ pay_date_from }}&pay_date_to={{ pay_date_to }}&pay_page_size={{ pay_page_size }}">Previous</a>{% endif %}
             <span>Page {{ payments_page.number }} of {{ payments_page.paginator.num_pages }} ({{ payments_page.paginator.count }} total)</span>
             {% if payments_page.has_next %}<a class="btn" href="?pay_page={{ payments_page.next_page_number }}&pay_q={{ pay_q }}&pay_date_from={{ pay_date_from }}&pay_date_to={{ pay_date_to }}&pay_page_size={{ pay_page_size }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+
+    <h2 style="margin-top:32px;">Casino History</h2>
+    <form method="get" style="margin-bottom: 12px;">
+        <input type="hidden" name="bet_q" value="{{ bet_q }}">
+        <input type="hidden" name="bet_date_from" value="{{ bet_date_from }}">
+        <input type="hidden" name="bet_date_to" value="{{ bet_date_to }}">
+        <input type="hidden" name="pay_q" value="{{ pay_q }}">
+        <input type="hidden" name="pay_date_from" value="{{ pay_date_from }}">
+        <input type="hidden" name="pay_date_to" value="{{ pay_date_to }}">
+        <input type="text" name="casino_q" value="{{ casino_q }}" placeholder="Search by game or provider name">
+        From <input type="datetime-local" name="casino_date_from" value="{{ casino_date_from }}">
+        To <input type="datetime-local" name="casino_date_to" value="{{ casino_date_to }}">
+        Show
+        <select name="casino_page_size">
+            <option value="10" {% if casino_page_size == 10 %}selected{% endif %}>10</option>
+            <option value="50" {% if casino_page_size == 50 %}selected{% endif %}>50</option>
+            <option value="100" {% if casino_page_size == 100 %}selected{% endif %}>100</option>
+            <option value="500" {% if casino_page_size == 500 %}selected{% endif %}>500</option>
+            <option value="1000" {% if casino_page_size == 1000 %}selected{% endif %}>1,000</option>
+            <option value="10000" {% if casino_page_size == 10000 %}selected{% endif %}>10,000</option>
+        </select>
+        per page
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="?export=casino_xlsx&casino_q={{ casino_q }}&casino_date_from={{ casino_date_from }}&casino_date_to={{ casino_date_to }}">Download Excel</a>
+    </form>
+
+    <table>
+        <thead>
+            <tr><th>Date</th><th>Game</th><th>Provider</th><th>Action</th><th>Amount</th><th>Free spin</th><th>Rollback</th><th>Round ID</th></tr>
+        </thead>
+        <tbody>
+            {% for event in casino_page %}
+                <tr>
+                    <td>{{ event.created_at|date:"Y-m-d H:i" }}</td>
+                    <td>{{ event.game.name|default:event.game_uid }}</td>
+                    <td>{{ event.game.brand.name|default:"—" }}</td>
+                    <td>{{ event.action }}{% if event.cash_skipped %} (no cash){% endif %}</td>
+                    <td>{{ event.amount }}</td>
+                    <td>{{ event.cash_skipped|yesno:"Yes,No" }}</td>
+                    <td>{{ event.is_rollback|yesno:"Yes,No" }}</td>
+                    <td><code>{{ event.round_id }}</code></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="8">No casino activity matches this search.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if casino_page.has_previous or casino_page.has_next %}
+        <div>
+            {% if casino_page.has_previous %}<a class="btn" href="?casino_page={{ casino_page.previous_page_number }}&casino_q={{ casino_q }}&casino_date_from={{ casino_date_from }}&casino_date_to={{ casino_date_to }}&casino_page_size={{ casino_page_size }}">Previous</a>{% endif %}
+            <span>Page {{ casino_page.number }} of {{ casino_page.paginator.num_pages }} ({{ casino_page.paginator.count }} total)</span>
+            {% if casino_page.has_next %}<a class="btn" href="?casino_page={{ casino_page.next_page_number }}&casino_q={{ casino_q }}&casino_date_from={{ casino_date_from }}&casino_date_to={{ casino_date_to }}&casino_page_size={{ casino_page_size }}">Next</a>{% endif %}
         </div>
     {% endif %}
 {% endblock %}

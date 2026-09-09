@@ -30,6 +30,10 @@ from apps.bets.services import place_bet, place_parlay_bet, refund_bet, settle_b
 from apps.exchange.services import place_order as place_exchange_order, cancel_order as cancel_exchange_order, settle_exchange_for_match, cash_out_order, preview_cash_out
 from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.cashback.models import CashbackCredit
+from apps.casino.models import CasinoBrand, CasinoConfig, CasinoGame, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent
+from apps.casino.services import (
+    launch_game as launch_casino_game, get_demo_url as get_casino_demo_url,
+)
 from apps.rewards.models import RewardPackage, UserRewardClaim
 from apps.sports.models import (
     BackMode, HouseLiquidityConfig, LayMode, Match, OddsAdjustmentConfig, PricingOverride, RealtimeOddsConfig,
@@ -1602,6 +1606,30 @@ def admin_user_ledger_view(request, user_id):
     pay_paginator = Paginator(payments_qs, pay_page_size)
     payments_page = pay_paginator.get_page(request.GET.get('pay_page'))
 
+    # --- Casino win/loss history ---
+    casino_q = request.GET.get('casino_q', '').strip()
+    casino_date_from = request.GET.get('casino_date_from', '').strip()
+    casino_date_to = request.GET.get('casino_date_to', '').strip()
+
+    casino_qs = CasinoWalletEvent.objects.filter(user=target).select_related('game', 'game__brand').order_by('-created_at')
+    if casino_q:
+        casino_qs = casino_qs.filter(
+            Q(game__name__icontains=casino_q) | Q(game__brand__name__icontains=casino_q) | Q(game_uid__icontains=casino_q)
+        )
+    casino_from_dt = _parse_pkt_date_bound(casino_date_from)
+    casino_to_dt = _parse_pkt_date_bound(casino_date_to, end_of_day=True)
+    if casino_from_dt:
+        casino_qs = casino_qs.filter(created_at__gte=casino_from_dt)
+    if casino_to_dt:
+        casino_qs = casino_qs.filter(created_at__lte=casino_to_dt)
+
+    if request.GET.get('export') == 'casino_xlsx':
+        return _export_casino_events_xlsx(target, casino_qs)
+
+    casino_page_size = _clamp_page_size(request.GET.get('casino_page_size'), default=50)
+    casino_paginator = Paginator(casino_qs, casino_page_size)
+    casino_page = casino_paginator.get_page(request.GET.get('casino_page'))
+
     return render(
         request,
         'web/admin_user_ledger.html',
@@ -1617,8 +1645,33 @@ def admin_user_ledger_view(request, user_id):
             'pay_date_from': pay_date_from,
             'pay_date_to': pay_date_to,
             'pay_page_size': pay_page_size,
+            'casino_page': casino_page,
+            'casino_q': casino_q,
+            'casino_date_from': casino_date_from,
+            'casino_date_to': casino_date_to,
+            'casino_page_size': casino_page_size,
             'active': 'admin_users',
         },
+    )
+
+
+def _export_casino_events_xlsx(target, casino_qs):
+    rows = []
+    for event in casino_qs.iterator():
+        game_label = f'{event.game.name} ({event.game.brand.name})' if event.game else event.game_uid
+        rows.append([
+            event.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            game_label,
+            event.action,
+            str(event.amount),
+            'Yes' if event.cash_skipped else 'No',
+            'Yes' if event.is_rollback else 'No',
+            event.round_id,
+        ])
+    return _build_xlsx_response(
+        f'{target.email}_casino_history.xlsx',
+        ['Date', 'Game', 'Action', 'Amount', 'Free spin (no cash)', 'Rollback', 'Round ID'],
+        rows,
     )
 
 
@@ -2823,3 +2876,286 @@ def bet_history_view(request):
             'active': 'bets',
         },
     )
+
+
+# --- Casino (SoftAPI / world-casino-api.com or Waija/SlotsGateway) --------
+
+def _casino_common_context(request):
+    from apps.casino.services import get_casino_provider
+    return {
+        'casino_enabled': CasinoConfig.get_solo().is_enabled,
+        # A true seamless-wallet provider (Waija) never takes a starting
+        # balance at launch - the amount box only makes sense for a
+        # provider like SoftAPI that holds a handed-over balance during
+        # play. See apps.casino.providers.BaseCasinoProvider.requires_upfront_balance.
+        'casino_requires_amount': get_casino_provider().requires_upfront_balance,
+        'active': 'casino',
+    }
+
+
+def _casino_lobby_context(request, extra=None):
+    """
+    Providers-first landing context: with no search, shows every active
+    CasinoBrand as a clickable card (see casino_provider_view for what's
+    behind one); with a search term, shows both matching providers and
+    matching games across the whole catalog, never mixing one provider's
+    games into another's dedicated page (that page always filters strictly
+    by brand - see _casino_provider_context).
+    """
+    query = request.GET.get('q', '').strip()
+    context = _casino_common_context(request)
+    context.update({'query': query, 'search_mode': bool(query)})
+
+    if query:
+        context['matching_brands'] = CasinoBrand.objects.filter(is_active=True, name__icontains=query).order_by('name')
+        games_qs = CasinoGame.objects.filter(
+            is_active=True, brand__is_active=True, name__icontains=query,
+        ).select_related('brand').order_by('name')
+        paginator = Paginator(games_qs, 24)
+        context['games'] = paginator.get_page(request.GET.get('page'))
+    else:
+        context['brands'] = CasinoBrand.objects.filter(is_active=True).order_by('name')
+
+    context.update(extra or {})
+    return context
+
+
+def _casino_provider_context(request, brand, extra=None):
+    """Strictly scoped to one provider's own games - never shows another provider's games on this page, by construction (games_qs always filters on this exact brand)."""
+    query = request.GET.get('q', '').strip()
+    games_qs = CasinoGame.objects.filter(brand=brand, is_active=True).order_by('name')
+    if query:
+        games_qs = games_qs.filter(name__icontains=query)
+    paginator = Paginator(games_qs, 24)
+
+    context = _casino_common_context(request)
+    context.update({'brand': brand, 'query': query, 'games': paginator.get_page(request.GET.get('page'))})
+    context.update(extra or {})
+    return context
+
+
+def _casino_error_context(request):
+    """
+    Rebuilds whichever casino page (lobby search, or one provider's page)
+    the launch/demo form was actually submitted from, using the hidden
+    source_brand_id field every game card includes - so an error message
+    lands back on the page the player was looking at, not always the
+    top-level lobby.
+    """
+    source_brand_id = request.POST.get('source_brand_id') or request.GET.get('source_brand_id')
+    if source_brand_id:
+        brand = CasinoBrand.objects.filter(pk=source_brand_id, is_active=True).first()
+        if brand is not None:
+            return 'web/casino_provider.html', _casino_provider_context(request, brand)
+    return 'web/casino_lobby.html', _casino_lobby_context(request)
+
+
+@login_required
+def casino_lobby_view(request):
+    return render(request, 'web/casino_lobby.html', _casino_lobby_context(request))
+
+
+@login_required
+def casino_provider_view(request, brand_id):
+    brand = get_object_or_404(CasinoBrand, pk=brand_id, is_active=True)
+    return render(request, 'web/casino_provider.html', _casino_provider_context(request, brand))
+
+
+@login_required
+@require_POST
+def casino_launch_view(request, game_id):
+    from apps.casino.services import get_casino_provider
+
+    game = get_object_or_404(CasinoGame, pk=game_id, is_active=True)
+    provider = get_casino_provider()
+    try:
+        amount = Decimal(request.POST.get('amount', '')) if provider.requires_upfront_balance else None
+        return_url = request.build_absolute_uri(reverse('web:casino_lobby'))
+        callback_url = request.build_absolute_uri(
+            reverse('casino:casino-callback') if provider.requires_upfront_balance
+            else reverse('casino:waija-callback')
+        )
+        session, launch_url = launch_casino_game(request.user, game, amount, return_url, callback_url)
+    except InvalidOperation:
+        template, context = _casino_error_context(request)
+        return render(request, template, {**context, 'error': 'Invalid amount.'})
+    except SERVICE_ERRORS as exc:
+        template, context = _casino_error_context(request)
+        return render(request, template, {**context, 'error': _error_message(exc)})
+    except RuntimeError as exc:
+        # Provider-side failures raised by apps.casino.providers (missing
+        # credentials, IP not whitelisted, a bad/expired token, etc.) -
+        # just as user-facing as a ValidationError, must never fall
+        # through to Django's raw debug/error page. A single `except
+        # (SERVICE_ERRORS, InvalidOperation, RuntimeError)` tuple looks
+        # equivalent but is NOT - SERVICE_ERRORS is itself a tuple, and
+        # Python's except clause (unlike isinstance()) does not accept a
+        # tuple nested inside another tuple - it raises "catching classes
+        # that do not inherit from BaseException is not allowed" instead
+        # of ever matching. Separate except blocks avoid that entirely.
+        template, context = _casino_error_context(request)
+        return render(request, template, {**context, 'error': str(exc)})
+    return _render_casino_play(request, game, launch_url)
+
+
+@login_required
+def casino_demo_view(request, game_id):
+    game = get_object_or_404(CasinoGame, pk=game_id, is_active=True)
+    try:
+        return_url = request.build_absolute_uri(reverse('web:casino_lobby'))
+        demo_url = get_casino_demo_url(game, return_url)
+    except Exception as exc:  # noqa: BLE001 - surface any provider error to the player
+        template, context = _casino_error_context(request)
+        return render(request, template, {**context, 'error': str(exc)})
+    return _render_casino_play(request, game, demo_url)
+
+
+def _render_casino_play(request, game, launch_url):
+    """
+    Embeds the provider's returned URL in an iframe on our own page rather
+    than redirecting the player's top-level browser tab there directly -
+    per Waija's own docs ("Open the URL in an iframe or a new window").
+    This is also what avoids a provider's own branded loading splash,
+    which several of these providers only show on a true top-level
+    navigation, not when framed - confirmed with Waija support, no
+    server-side/account setting needed for it, purely how we embed the URL.
+    """
+    source_brand_id = request.POST.get('source_brand_id') or request.GET.get('source_brand_id')
+    brand = CasinoBrand.objects.filter(pk=source_brand_id, is_active=True).first() if source_brand_id else None
+    return render(request, 'web/casino_play.html', {'game': game, 'brand': brand, 'launch_url': launch_url, 'active': 'casino'})
+
+
+def admin_casino_dashboard_view(request):
+    """
+    Dashboard for the casino integration - GGR wallet balance (live from
+    the provider), stat cards, and the CasinoConfig settings form. Mirrors
+    admin_odds_adjustment_view's settings-form shape and
+    admin_exchange_dashboard_view's stat-card shape.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    config = CasinoConfig.get_solo()
+    error = None
+    ggr_balance = None
+    ggr_error = None
+
+    if request.method == 'POST':
+        try:
+            config.is_enabled = request.POST.get('is_enabled') == 'on'
+            config.max_launch_balance = Decimal(request.POST.get('max_launch_balance', '').strip())
+            config.provider_currency_code = request.POST.get('provider_currency_code', 'USD').strip().upper() or 'USD'
+            config.usd_to_provider_currency_rate = Decimal(request.POST.get('usd_to_provider_currency_rate', '').strip())
+            config.full_clean()
+            config.save()
+            return redirect('web:admin_casino')
+        except (ValidationError, InvalidOperation) as exc:
+            error = _error_message(exc)
+
+    try:
+        from apps.casino.services import get_casino_provider
+        ggr_balance = get_casino_provider().fetch_ggr_balance()
+    except Exception as exc:  # noqa: BLE001 - provider may not be configured/reachable yet
+        ggr_error = str(exc)
+
+    from django.db.models import Count, Sum
+
+    stats = {
+        'open_sessions': CasinoSession.objects.filter(status=CasinoSession.Status.OPEN).count(),
+        'total_sessions': CasinoSession.objects.count(),
+        'total_wagered_usd': CasinoSession.objects.aggregate(s=Sum('opened_balance_usd'))['s'] or Decimal('0'),
+        'total_won_usd': CasinoRoundSettlement.objects.aggregate(s=Sum('win_amount'))['s'] or Decimal('0'),
+        'active_games': CasinoGame.objects.filter(is_active=True).count(),
+        'active_brands': CasinoBrand.objects.filter(is_active=True).count(),
+    }
+
+    return render(request, 'web/admin_casino.html', {
+        'config': config,
+        'error': error,
+        'ggr_balance': ggr_balance,
+        'ggr_error': ggr_error,
+        'stats': stats,
+        'active': 'admin_casino',
+    })
+
+
+def admin_casino_providers_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        brand_ids = request.POST.getlist('brand_ids')
+        if action == 'enable':
+            CasinoBrand.objects.filter(pk__in=brand_ids).update(is_active=True)
+        elif action == 'disable':
+            CasinoBrand.objects.filter(pk__in=brand_ids).update(is_active=False)
+        return redirect('web:admin_casino_providers')
+
+    brands = CasinoBrand.objects.order_by('name')
+    return render(request, 'web/admin_casino_providers.html', {'brands': brands, 'active': 'admin_casino'})
+
+
+def admin_casino_games_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        game_ids = request.POST.getlist('game_ids')
+        if action == 'enable':
+            CasinoGame.objects.filter(pk__in=game_ids).update(is_active=True)
+        elif action == 'disable':
+            CasinoGame.objects.filter(pk__in=game_ids).update(is_active=False)
+        return redirect(f"{reverse('web:admin_casino_games')}?{request.META.get('QUERY_STRING', '')}")
+
+    games_q = request.GET.get('games_q', '').strip()
+    games_brand = request.GET.get('games_brand', '').strip()
+
+    games_qs = CasinoGame.objects.select_related('brand').order_by('name')
+    if games_q:
+        games_qs = games_qs.filter(name__icontains=games_q)
+    if games_brand:
+        games_qs = games_qs.filter(brand_id=games_brand)
+
+    paginator = Paginator(games_qs, 50)
+    games_page = paginator.get_page(request.GET.get('games_page'))
+
+    return render(request, 'web/admin_casino_games.html', {
+        'games_page': games_page,
+        'games_q': games_q,
+        'games_brand': games_brand,
+        'all_brands': CasinoBrand.objects.order_by('name'),
+        'active': 'admin_casino',
+    })
+
+
+def admin_casino_sessions_view(request):
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    sessions_q = request.GET.get('sessions_q', '').strip()
+    sessions_qs = CasinoSession.objects.select_related('user', 'game').order_by('-launched_at')
+    if sessions_q:
+        sessions_qs = sessions_qs.filter(user__email__icontains=sessions_q)
+
+    if request.GET.get('export') == 'sessions_xlsx':
+        rows = [
+            [s.id, s.user.email, s.game.name, str(s.opened_balance_usd), str(s.opened_balance_provider_currency),
+             s.provider_currency_code, s.status, s.launched_at.strftime('%Y-%m-%d %H:%M:%S')]
+            for s in sessions_qs
+        ]
+        return _build_xlsx_response(
+            'casino_sessions.xlsx',
+            ['ID', 'User', 'Game', 'Opened (USD)', 'Opened (provider currency)', 'Currency', 'Status', 'Launched at'],
+            rows,
+        )
+
+    paginator = Paginator(sessions_qs, 25)
+    sessions_page = paginator.get_page(request.GET.get('sessions_page'))
+
+    return render(request, 'web/admin_casino_sessions.html', {
+        'sessions_page': sessions_page,
+        'sessions_q': sessions_q,
+        'active': 'admin_casino',
+    })

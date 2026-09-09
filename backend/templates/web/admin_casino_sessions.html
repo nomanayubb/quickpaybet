@@ -1,0 +1,39 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Casino Sessions</h1>
+    <p><a href="{% url 'web:admin_casino' %}">← Back to Casino dashboard</a></p>
+
+    <form method="get" style="margin-bottom:12px;">
+        <input type="text" name="sessions_q" value="{{ sessions_q }}" placeholder="Search by user email">
+        <button type="submit" class="btn">Search</button>
+        <a class="btn" href="{% url 'web:admin_casino_sessions' %}">Reset</a>
+        <a class="btn" href="?export=sessions_xlsx&sessions_q={{ sessions_q }}">Export .xlsx</a>
+    </form>
+
+    <table>
+        <thead><tr><th>User</th><th>Game</th><th>Opened (USD)</th><th>Opened (PKR)</th><th>Status</th><th>Launched</th></tr></thead>
+        <tbody>
+            {% for s in sessions_page %}
+                <tr>
+                    <td>{{ s.user.email }}</td>
+                    <td>{{ s.game.name }}</td>
+                    <td>{{ s.opened_balance_usd }}</td>
+                    <td>{{ s.opened_balance_provider_currency }} {{ s.provider_currency_code }}</td>
+                    <td>{{ s.status }}</td>
+                    <td>{{ s.launched_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6">No casino sessions yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if sessions_page.has_previous or sessions_page.has_next %}
+        <div style="margin-top:12px;">
+            {% if sessions_page.has_previous %}<a class="btn" href="?sessions_page={{ sessions_page.previous_page_number }}&sessions_q={{ sessions_q }}">Previous</a>{% endif %}
+            <span>Page {{ sessions_page.number }} of {{ sessions_page.paginator.num_pages }}</span>
+            {% if sessions_page.has_next %}<a class="btn" href="?sessions_page={{ sessions_page.next_page_number }}&sessions_q={{ sessions_q }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+{% endblock %}

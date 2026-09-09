@@ -1,0 +1,64 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Casino</h1>
+
+    {% if not casino_enabled %}
+        <p class="error">The casino is currently disabled by the admin.</p>
+    {% endif %}
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <form method="get" style="margin-bottom:16px;">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search games or providers" style="width:300px;">
+        <button type="submit" class="btn">Search</button>
+        {% if query %}<a class="btn" href="{% url 'web:casino_lobby' %}">Reset</a>{% endif %}
+    </form>
+
+    {% if search_mode %}
+        {% if matching_brands %}
+            <h2>Providers</h2>
+            <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:24px;">
+                {% for b in matching_brands %}
+                    <a href="{% url 'web:casino_provider' b.id %}" style="border:1px solid #ddd;border-radius:6px;padding:16px;width:180px;text-align:center;text-decoration:none;color:inherit;">
+                        {% if b.logo_url %}<img src="{{ b.logo_url }}" alt="{{ b.name }}" style="max-width:100%;max-height:60px;margin-bottom:8px;">{% endif %}
+                        <div><strong>{{ b.name }}</strong></div>
+                        <div style="color:#777;font-size:12px;">{{ b.game_count }} games</div>
+                    </a>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <h2>Games</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;">
+            {% for game in games %}
+                {% include 'web/_casino_game_card.html' %}
+            {% empty %}
+                {% if not matching_brands %}<p>No games or providers match this search.</p>{% endif %}
+            {% endfor %}
+        </div>
+
+        {% if games.has_previous or games.has_next %}
+            <div style="margin-top:16px;">
+                {% if games.has_previous %}<a class="btn" href="?page={{ games.previous_page_number }}&q={{ query }}">Previous</a>{% endif %}
+                <span>Page {{ games.number }} of {{ games.paginator.num_pages }}</span>
+                {% if games.has_next %}<a class="btn" href="?page={{ games.next_page_number }}&q={{ query }}">Next</a>{% endif %}
+            </div>
+        {% endif %}
+    {% else %}
+        <h2>Providers</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;">
+            {% for b in brands %}
+                <a href="{% url 'web:casino_provider' b.id %}" style="border:1px solid #ddd;border-radius:6px;padding:16px;width:180px;text-align:center;text-decoration:none;color:inherit;">
+                    {% if b.logo_url %}<img src="{{ b.logo_url }}" alt="{{ b.name }}" style="max-width:100%;max-height:60px;margin-bottom:8px;">{% endif %}
+                    <div><strong>{{ b.name }}</strong></div>
+                    <div style="color:#777;font-size:12px;">{{ b.game_count }} games</div>
+                </a>
+            {% empty %}
+                <p>No casino providers available right now.</p>
+            {% endfor %}
+        </div>
+    {% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+<div style="border:1px solid #ddd;border-radius:6px;padding:12px;width:220px;">
+    {% if game.logo_url %}
+        <img src="{{ game.logo_url }}" alt="{{ game.name }}" style="width:100%;border-radius:4px;">
+    {% endif %}
+    <h3 style="margin:8px 0 2px;">{{ game.name }}</h3>
+    <p style="color:#777;font-size:12px;margin:0 0 8px;">{{ game.brand.name }} &middot; {{ game.category }}</p>
+
+    <form method="post" action="{% url 'web:casino_launch' game.id %}" style="margin-bottom:6px;">
+        {% csrf_token %}
+        {% if brand %}<input type="hidden" name="source_brand_id" value="{{ brand.id }}">{% endif %}
+        {% if casino_requires_amount %}
+            <input type="number" name="amount" step="0.01" min="0.01" placeholder="Amount (USD)" required style="width:100%;margin-bottom:4px;">
+        {% endif %}
+        <button type="submit" class="btn" {% if not casino_enabled %}disabled{% endif %}>Play</button>
+    </form>
+    <a class="btn" href="{% url 'web:casino_demo' game.id %}{% if brand %}?source_brand_id={{ brand.id }}{% endif %}">Demo</a>
+</div>

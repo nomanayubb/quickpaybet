@@ -51,6 +51,9 @@ class WalletTransaction(models.Model):
         EXCHANGE_LOST = 'exchange_lost', 'Exchange Lost'
         CASHBACK_CREDIT = 'cashback_credit', 'Cashback Credit'
         CASHBACK_CLAWBACK = 'cashback_clawback', 'Cashback Clawback'
+        CASINO_SESSION_OPEN = 'casino_session_open', 'Casino Session Open'
+        CASINO_WIN = 'casino_win', 'Casino Win'
+        CASINO_BET = 'casino_bet', 'Casino Bet'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'

@@ -1,0 +1,36 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>{{ brand.name }}</h1>
+    <p><a href="{% url 'web:casino_lobby' %}">&larr; All providers</a></p>
+
+    {% if not casino_enabled %}
+        <p class="error">The casino is currently disabled by the admin.</p>
+    {% endif %}
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+    <form method="get" style="margin-bottom:16px;">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search {{ brand.name }} games">
+        <button type="submit" class="btn">Search</button>
+        {% if query %}<a class="btn" href="{% url 'web:casino_provider' brand.id %}">Reset</a>{% endif %}
+    </form>
+
+    <div style="display:flex;flex-wrap:wrap;gap:16px;">
+        {% for game in games %}
+            {% include 'web/_casino_game_card.html' %}
+        {% empty %}
+            <p>No games match this search.</p>
+        {% endfor %}
+    </div>
+
+    {% if games.has_previous or games.has_next %}
+        <div style="margin-top:16px;">
+            {% if games.has_previous %}<a class="btn" href="?page={{ games.previous_page_number }}&q={{ query }}">Previous</a>{% endif %}
+            <span>Page {{ games.number }} of {{ games.paginator.num_pages }}</span>
+            {% if games.has_next %}<a class="btn" href="?page={{ games.next_page_number }}&q={{ query }}">Next</a>{% endif %}
+        </div>
+    {% endif %}
+{% endblock %}
