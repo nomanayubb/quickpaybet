@@ -11,39 +11,49 @@ from apps.wallet.models import FxRateConfig
 
 logger = logging.getLogger(__name__)
 
+# fawazahmed0/currency-api: static JSON served off free CDNs (jsdelivr,
+# with a Cloudflare Pages mirror as fallback) rather than a paid API
+# service - no key, no account, no subscription to ever lapse or start
+# requiring payment (unlike Open Exchange Rates, whose free tier was
+# discontinued - see docs/PROJECT_MASTER_DOCUMENTATION Section 4.24).
+# Data source: https://github.com/fawazahmed0/currency-api
+RATE_URLS = [
+    'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json',
+    'https://latest.currency-api.pages.dev/v1/currencies/usd.json',
+]
+
 
 class Command(BaseCommand):
     help = (
-        'Fetches the live USD->PKR rate from Open Exchange Rates and updates '
-        'FxRateConfig. Skipped entirely if is_manual_override is on, or if no '
-        'OPEN_EXCHANGE_RATES_APP_ID is configured. On any failure the last '
-        'known-good rate is left untouched - this must never block deposits.'
+        'Fetches the live USD->PKR rate from the free fawazahmed0/currency-api '
+        '(no key required) and updates FxRateConfig. Skipped entirely if '
+        'is_manual_override is on. On any failure the last known-good rate is '
+        'left untouched - this must never block deposits.'
     )
 
-    def handle(self, *args, **options):
-        import os
+    def _fetch_rate(self):
+        last_error = None
+        for url in RATE_URLS:
+            request = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    body = json.loads(response.read().decode('utf-8'))
+                return Decimal(str(body['usd']['pkr']))
+            except (urllib.error.URLError, urllib.error.HTTPError, KeyError, ValueError, InvalidOperation) as exc:
+                last_error = exc
+                continue
+        raise RuntimeError(f'All rate sources failed: {last_error}')
 
+    def handle(self, *args, **options):
         config = FxRateConfig.get_solo()
 
         if config.is_manual_override:
             self.stdout.write('Manual override is on - skipping live fetch.')
             return
 
-        app_id = os.getenv('OPEN_EXCHANGE_RATES_APP_ID', '').strip()
-        if not app_id:
-            msg = 'OPEN_EXCHANGE_RATES_APP_ID is not configured - skipping live fetch, last known rate kept.'
-            self.stdout.write(self.style.WARNING(msg))
-            config.last_sync_error = msg
-            config.save(update_fields=['last_sync_error', 'updated_at'])
-            return
-
-        url = f'https://openexchangerates.org/api/latest.json?app_id={app_id}&symbols=PKR'
-        request = urllib.request.Request(url, headers={'Accept': 'application/json'})
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                body = json.loads(response.read().decode('utf-8'))
-            rate = Decimal(str(body['rates']['PKR']))
-        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, ValueError, InvalidOperation) as exc:
+            rate = self._fetch_rate()
+        except Exception as exc:
             error_message = f'FX rate fetch failed: {exc}'
             logger.warning(error_message)
             config.last_sync_error = error_message[:500]
