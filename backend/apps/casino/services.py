@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.audit.services import create_audit_log
 from apps.wallet.models import Wallet, WalletTransaction
+from apps.wallet.services import convert_usd_to_wallet_currency, convert_wallet_currency_to_usd
 
 from .models import CasinoBrand, CasinoConfig, CasinoGame, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent
 from .providers import get_casino_provider
@@ -65,6 +66,11 @@ def launch_game(user, game: CasinoGame, requested_usd_amount: Decimal | None, re
             return_url=return_url,
             callback_url=callback_url,
         )
+        # No wallet debit happens at launch for a seamless provider - each
+        # bet/win is converted independently, at its own live rate, when it
+        # actually happens (see handle_waija_wallet_event). This snapshot is
+        # purely informational (what the rate was at launch time).
+        _, _, wallet_fx_rate_at_launch = convert_usd_to_wallet_currency(user, Decimal('0'))
         session = CasinoSession.objects.create(
             user=user,
             game=game,
@@ -72,6 +78,9 @@ def launch_game(user, game: CasinoGame, requested_usd_amount: Decimal | None, re
             opened_balance_provider_currency=Decimal('0'),
             provider_currency_code=provider_currency_code,
             fx_rate_applied=rate,
+            wallet_amount=Decimal('0'),
+            wallet_currency=user.currency,
+            wallet_fx_rate_applied=wallet_fx_rate_at_launch,
         )
         create_audit_log(
             user=user, action='casino_session_launched', target_type='casino_session', target_id=session.id,
@@ -86,11 +95,21 @@ def launch_game(user, game: CasinoGame, requested_usd_amount: Decimal | None, re
 
     provider_amount = (requested_usd_amount * rate).quantize(Decimal('0.01'))
 
+    # wallet_amount/wallet_currency/wallet_fx_rate is a SEPARATE conversion
+    # from provider_amount above: provider_amount converts USD into the
+    # provider account's own currency (Waija/SoftAPI - currently always
+    # USD, rate 1.0000); wallet_amount converts USD into this specific
+    # user's own wallet currency (PKR for a Pakistani user). The wallet is
+    # only ever debited/credited in wallet_amount/wallet_currency terms -
+    # requested_usd_amount is a USD figure and must never be applied to a
+    # wallet directly (see apps.wallet.services.convert_usd_to_wallet_currency).
+    wallet_amount, wallet_currency, wallet_fx_rate = convert_usd_to_wallet_currency(user, requested_usd_amount)
+
     with transaction.atomic():
         wallet = Wallet.objects.select_for_update().get(user=user)
-        if wallet.available_balance < requested_usd_amount:
+        if wallet.available_balance < wallet_amount:
             raise ValidationError('Insufficient available balance.')
-        wallet.reserved_balance += requested_usd_amount
+        wallet.reserved_balance += wallet_amount
         wallet.save(update_fields=['reserved_balance', 'updated_at'])
 
     try:
@@ -106,14 +125,14 @@ def launch_game(user, game: CasinoGame, requested_usd_amount: Decimal | None, re
     except Exception:
         with transaction.atomic():
             wallet = Wallet.objects.select_for_update().get(user=user)
-            wallet.reserved_balance -= requested_usd_amount
+            wallet.reserved_balance -= wallet_amount
             wallet.save(update_fields=['reserved_balance', 'updated_at'])
         raise
 
     with transaction.atomic():
         wallet = Wallet.objects.select_for_update().get(user=user)
-        wallet.reserved_balance -= requested_usd_amount
-        wallet.balance -= requested_usd_amount
+        wallet.reserved_balance -= wallet_amount
+        wallet.balance -= wallet_amount
         wallet.save(update_fields=['balance', 'reserved_balance', 'updated_at'])
 
         session = CasinoSession.objects.create(
@@ -123,11 +142,14 @@ def launch_game(user, game: CasinoGame, requested_usd_amount: Decimal | None, re
             opened_balance_provider_currency=provider_amount,
             provider_currency_code=provider_currency_code,
             fx_rate_applied=rate,
+            wallet_amount=wallet_amount,
+            wallet_currency=wallet_currency,
+            wallet_fx_rate_applied=wallet_fx_rate,
         )
         WalletTransaction.objects.create(
             wallet=wallet,
             txn_type=WalletTransaction.TxnType.CASINO_SESSION_OPEN,
-            amount=-requested_usd_amount,
+            amount=-wallet_amount,
             status=WalletTransaction.Status.COMPLETED,
             balance_after=wallet.balance,
             reference_id=f'casino-session-{session.id}',
@@ -136,7 +158,7 @@ def launch_game(user, game: CasinoGame, requested_usd_amount: Decimal | None, re
 
     create_audit_log(
         user=user, action='casino_session_launched', target_type='casino_session', target_id=session.id,
-        metadata={'game': game.name, 'amount_usd': str(requested_usd_amount), 'amount_provider_currency': str(provider_amount)},
+        metadata={'game': game.name, 'amount_usd': str(requested_usd_amount), 'amount_provider_currency': str(provider_amount), 'wallet_amount': str(wallet_amount)},
     )
     return session, result['url']
 
@@ -186,6 +208,11 @@ def handle_round_settlement(*, member_account: str, game_uid: str, bet_amount, w
             return  # already processed - safe to call more than once
 
         win_amount_usd = (win_amount / session.fx_rate_applied).quantize(Decimal('0.00000001'))
+        # win_amount_usd is in USD (the provider account's own currency) -
+        # must still be converted into this user's own wallet currency
+        # before touching wallet.balance, same as every other wallet
+        # mutation in this file (see apps.wallet.services.convert_usd_to_wallet_currency).
+        win_wallet_amount, _, _ = convert_usd_to_wallet_currency(user, win_amount_usd)
 
         try:
             CasinoRoundSettlement.objects.create(
@@ -199,14 +226,14 @@ def handle_round_settlement(*, member_account: str, game_uid: str, bet_amount, w
         except IntegrityError:
             return  # duplicate serial_number raced in - already processed
 
-        if win_amount_usd > 0:
+        if win_wallet_amount > 0:
             wallet = Wallet.objects.select_for_update().get(user=user)
-            wallet.balance += win_amount_usd
+            wallet.balance += win_wallet_amount
             wallet.save(update_fields=['balance', 'updated_at'])
             WalletTransaction.objects.create(
                 wallet=wallet,
                 txn_type=WalletTransaction.TxnType.CASINO_WIN,
-                amount=win_amount_usd,
+                amount=win_wallet_amount,
                 status=WalletTransaction.Status.COMPLETED,
                 balance_after=wallet.balance,
                 reference_id=f'casino-round-{serial_number}',
@@ -282,10 +309,17 @@ def _resolve_waija_user(username: str):
 
 
 def handle_waija_balance_query(username: str) -> Decimal:
-    """No money movement - just reports the live wallet balance for Waija's `balance` callback."""
+    """
+    No money movement - just reports the live wallet balance for Waija's
+    `balance` callback. Waija's account currency is fixed to USD
+    (CasinoConfig.provider_currency_code) regardless of this specific
+    user's own wallet currency, so a PKR wallet's balance must be converted
+    back to USD before reporting it - Waija has no PKR concept and would
+    otherwise validate bets against a number in the wrong units entirely.
+    """
     user = _resolve_waija_user(username)
     wallet, _ = Wallet.objects.get_or_create(user=user)
-    return wallet.balance
+    return convert_wallet_currency_to_usd(user, wallet.balance)
 
 
 def handle_waija_wallet_event(*, username: str, action: str, amount: Decimal, call_id: str,
@@ -307,28 +341,43 @@ def handle_waija_wallet_event(*, username: str, action: str, amount: Decimal, ca
     touches real cash - the provider's docs are explicit that the free
     round was already paid for elsewhere; a win from it still credits
     real cash normally.
+
+    `amount` arrives from Waija in the provider account's own currency
+    (USD, per CasinoConfig.provider_currency_code - Waija has no PKR rail,
+    see apps.casino.providers_waija). It is converted into this specific
+    user's own wallet currency (convert_usd_to_wallet_currency) before ever
+    touching wallet.balance, and the balance handed back to the caller (for
+    the callback response Waija itself reads) is converted back to USD
+    (convert_wallet_currency_to_usd) - Waija must never see a raw PKR
+    number where it expects a USD one, in either direction. The rate used
+    is looked up live for each individual event rather than snapshotted per
+    session, since CasinoWalletEvent isn't tied to any one CasinoSession
+    (Waija's own docs: these are independent debits/credits against the
+    live wallet, not scoped to a session-level reservation) - the rate only
+    changes hourly, so this has no meaningful effect on money math.
     """
     user = _resolve_waija_user(username)
     game = CasinoGame.objects.filter(game_uid=game_uid).select_related('brand').first()
     game_label = f'{game.name} ({game.brand.name})' if game else game_uid
+    wallet_amount, wallet_currency, wallet_fx_rate = convert_usd_to_wallet_currency(user, amount)
 
     with transaction.atomic():
         wallet = Wallet.objects.select_for_update().get(user=user)
 
         if CasinoWalletEvent.objects.filter(call_id=call_id).exists():
-            return wallet.balance  # already applied - safe to call more than once
+            return convert_wallet_currency_to_usd(user, wallet.balance)  # already applied - safe to call more than once
 
         cash_skipped = event_type == 'bonus_fs' and action == CasinoWalletEvent.Action.DEBIT
 
         if not cash_skipped:
             if action == CasinoWalletEvent.Action.DEBIT:
-                if wallet.available_balance < amount:
-                    raise InsufficientCasinoBalance(wallet.balance)
-                wallet.balance -= amount
-                txn_type, txn_amount = WalletTransaction.TxnType.CASINO_BET, -amount
+                if wallet.available_balance < wallet_amount:
+                    raise InsufficientCasinoBalance(convert_wallet_currency_to_usd(user, wallet.balance))
+                wallet.balance -= wallet_amount
+                txn_type, txn_amount = WalletTransaction.TxnType.CASINO_BET, -wallet_amount
             else:
-                wallet.balance += amount
-                txn_type, txn_amount = WalletTransaction.TxnType.CASINO_WIN, amount
+                wallet.balance += wallet_amount
+                txn_type, txn_amount = WalletTransaction.TxnType.CASINO_WIN, wallet_amount
             wallet.save(update_fields=['balance', 'updated_at'])
             WalletTransaction.objects.create(
                 wallet=wallet, txn_type=txn_type, amount=txn_amount,
@@ -342,8 +391,9 @@ def handle_waija_wallet_event(*, username: str, action: str, amount: Decimal, ca
                 user=user, call_id=call_id, action=action, amount=amount, round_id=round_id,
                 game_uid=game_uid, game=game, event_type=event_type, is_rollback=is_rollback,
                 cash_skipped=cash_skipped, raw_payload=raw_payload,
+                wallet_amount=wallet_amount, wallet_currency=wallet_currency, wallet_fx_rate_applied=wallet_fx_rate,
             )
         except IntegrityError:
             pass  # duplicate call_id - the wallet lock above already made this unreachable in practice
 
-    return wallet.balance
+    return convert_wallet_currency_to_usd(user, wallet.balance)

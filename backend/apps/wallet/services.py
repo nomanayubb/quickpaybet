@@ -27,6 +27,20 @@ def convert_usd_to_wallet_currency(user, usd_amount: Decimal) -> tuple[Decimal, 
     return usd_amount, 'USD', Decimal('1.0000')
 
 
+def convert_wallet_currency_to_usd(user, wallet_amount: Decimal) -> Decimal:
+    """
+    The inverse of convert_usd_to_wallet_currency - converts an amount
+    already in the user's own wallet currency back into USD. Used wherever
+    a USD-only third party (a casino provider account fixed to USD, e.g.)
+    needs to be told a balance/amount in its own terms rather than the
+    user's wallet currency - see apps.casino.services.handle_waija_balance_query.
+    """
+    if user.currency == 'PKR':
+        rate = FxRateConfig.get_solo().usd_pkr_rate
+        return (wallet_amount / rate).quantize(Decimal('0.00000001'))
+    return wallet_amount
+
+
 def deposit_funds(user, amount: Decimal, description: str = 'Crypto deposit'):
     """
     Immediately adds the deposit amount to the user's wallet.

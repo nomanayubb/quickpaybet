@@ -116,6 +116,13 @@ class CasinoSession(models.Model):
     opened_balance_provider_currency = models.DecimalField(max_digits=20, decimal_places=8)
     provider_currency_code = models.CharField(max_length=10)
     fx_rate_applied = models.DecimalField(max_digits=10, decimal_places=4)
+    wallet_amount = models.DecimalField(
+        max_digits=20, decimal_places=8, default=Decimal('0'),
+        verbose_name='Amount actually debited from the wallet, in wallet_currency (see apps.wallet.services.convert_usd_to_wallet_currency) '
+                     '- distinct from opened_balance_provider_currency, which is the Waija/SoftAPI account-currency conversion, a separate concern',
+    )
+    wallet_currency = models.CharField(max_length=3, default='USD')
+    wallet_fx_rate_applied = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('1.0000'))
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
     launched_at = models.DateTimeField(auto_now_add=True)
     closed_at = models.DateTimeField(null=True, blank=True)
@@ -176,7 +183,18 @@ class CasinoWalletEvent(models.Model):
     )
     call_id = models.CharField(max_length=255, unique=True)
     action = models.CharField(max_length=10, choices=Action.choices)
-    amount = models.DecimalField(max_digits=20, decimal_places=8)
+    amount = models.DecimalField(
+        max_digits=20, decimal_places=8,
+        verbose_name='Raw amount as reported by the provider, in the provider account currency (USD today) - kept '
+                     'unchanged for reconciliation against the provider\'s own dashboard; see wallet_amount for what '
+                     'was actually applied to the wallet',
+    )
+    wallet_amount = models.DecimalField(
+        max_digits=20, decimal_places=8, default=Decimal('0'),
+        verbose_name='Amount actually applied to wallet.balance, in wallet_currency (see apps.wallet.services.convert_usd_to_wallet_currency)',
+    )
+    wallet_currency = models.CharField(max_length=3, default='USD')
+    wallet_fx_rate_applied = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('1.0000'))
     round_id = models.CharField(max_length=255, blank=True, default='')
     game_uid = models.CharField(max_length=150, blank=True, default='')
     game = models.ForeignKey(

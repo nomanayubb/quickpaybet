@@ -344,3 +344,105 @@ class WaijaWalletCallbackViewTests(TestCase):
         response = self.client.get('/api/casino/waija/callback/', params)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {'error': 2, 'balance': 0})
+
+
+class PkrWalletCurrencyTests(TestCase):
+    """
+    Every casino money path must convert into the user's own wallet
+    currency, not apply Waija/SoftAPI's raw USD-denominated figures
+    directly - see apps.wallet.services.convert_usd_to_wallet_currency and
+    the fix in apps.casino.services (2026-09-09). Hand-computed, not just
+    algebra, per this project's standing money-math test rule.
+    """
+
+    def setUp(self):
+        from apps.wallet.models import FxRateConfig
+
+        FxRateConfig.objects.update_or_create(pk=1, defaults={'usd_pkr_rate': Decimal('280.0000')})
+        CasinoConfig.objects.filter(pk=1).delete()
+        self.config = CasinoConfig.objects.create(
+            pk=1, is_enabled=True, max_launch_balance=Decimal('100.00'),
+            provider_currency_code='USD', usd_to_provider_currency_rate=Decimal('1.0000'),
+        )
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=737, game_uid='737', brand=self.brand, name='Aviator', category='slots', is_active=True,
+        )
+        self.pkr_user = User.objects.create_user(email='casinopkr@example.com', password='testpass123', currency='PKR')
+        self.wallet = Wallet.objects.get(user=self.pkr_user)
+        deposit_funds(self.pkr_user, Decimal('5000'))  # 5000 PKR
+        self.wallet.refresh_from_db()
+
+    def test_waija_debit_converts_usd_to_pkr_before_touching_wallet(self):
+        # Waija reports a $1.00 bet - must debit 1.00 * 280.0000 = 280.00 PKR, not 1.00
+        username = f'qpb{self.pkr_user.id}'
+        handle_waija_wallet_event(
+            username=username, action='debit', amount=Decimal('1.00'), call_id='pkr-debit-1',
+            round_id='round-1', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('4720.00'))  # 5000 - 280
+
+        event = CasinoWalletEvent.objects.get(call_id='pkr-debit-1')
+        self.assertEqual(event.amount, Decimal('1.00000000'))  # raw Waija-reported USD figure, untouched
+        self.assertEqual(event.wallet_amount, Decimal('280.00'))
+        self.assertEqual(event.wallet_currency, 'PKR')
+        self.assertEqual(event.wallet_fx_rate_applied, Decimal('280.0000'))
+
+    def test_waija_credit_converts_usd_to_pkr_before_touching_wallet(self):
+        username = f'qpb{self.pkr_user.id}'
+        handle_waija_wallet_event(
+            username=username, action='credit', amount=Decimal('2.50'), call_id='pkr-credit-1',
+            round_id='round-1', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('5700.00'))  # 5000 + (2.50 * 280.0000 = 700.00)
+
+    def test_waija_balance_query_reports_usd_not_raw_pkr_balance(self):
+        # wallet.balance is 5000 PKR - Waija must be told the USD-equivalent
+        # (5000 / 280.0000 = 17.85714286), never the raw 5000 figure.
+        username = f'qpb{self.pkr_user.id}'
+        reported = handle_waija_balance_query(username)
+        self.assertEqual(reported, Decimal('17.85714286'))
+
+    def test_insufficient_balance_exception_carries_usd_amount(self):
+        # Wallet only has 5000 PKR (~17.86 USD) - a $100 debit must be
+        # rejected, and the balance on the exception must be in USD too
+        # (it's sent straight back to Waija in the callback response).
+        username = f'qpb{self.pkr_user.id}'
+        with self.assertRaises(InsufficientCasinoBalance) as ctx:
+            handle_waija_wallet_event(
+                username=username, action='debit', amount=Decimal('100'), call_id='pkr-toobig',
+                round_id='round-2', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+            )
+        self.assertEqual(ctx.exception.balance, Decimal('17.85714286'))
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('5000'))  # untouched
+
+    def test_lump_sum_launch_debits_pkr_amount_not_usd_amount(self):
+        # MockCasinoProvider requires_upfront_balance=True (the lump-sum
+        # path). Launching with 10 USD must debit 10 * 280.0000 = 2800.00
+        # PKR from the wallet, not 10.
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            session, _ = launch_game(self.pkr_user, self.game, Decimal('10'), 'https://x/return', 'https://x/callback')
+
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('2200.00'))  # 5000 - 2800
+        self.assertEqual(session.wallet_amount, Decimal('2800.00'))
+        self.assertEqual(session.wallet_currency, 'PKR')
+        self.assertEqual(session.wallet_fx_rate_applied, Decimal('280.0000'))
+
+    def test_round_settlement_credits_pkr_amount_not_usd_amount(self):
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            launch_game(self.pkr_user, self.game, Decimal('10'), 'https://x/return', 'https://x/callback')
+
+        # provider_currency_code is USD (rate 1.0000) here, so win_amount
+        # (provider currency) == win_amount_usd == 5.00; must still convert
+        # to the wallet's own PKR before crediting: 5.00 * 280.0000 = 1400.00
+        handle_round_settlement(
+            member_account=str(self.pkr_user.id), game_uid=self.game.game_uid,
+            bet_amount=10, win_amount=5, credit_amount=5,
+            serial_number='pkr-round-1', raw_payload={},
+        )
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, Decimal('3600.00'))  # 2200 + 1400

@@ -1665,13 +1665,14 @@ def _export_casino_events_xlsx(target, casino_qs):
             game_label,
             event.action,
             str(event.amount),
+            f'{event.wallet_amount} {event.wallet_currency}',
             'Yes' if event.cash_skipped else 'No',
             'Yes' if event.is_rollback else 'No',
             event.round_id,
         ])
     return _build_xlsx_response(
         f'{target.email}_casino_history.xlsx',
-        ['Date', 'Game', 'Action', 'Amount', 'Free spin (no cash)', 'Rollback', 'Round ID'],
+        ['Date', 'Game', 'Action', 'Amount (Provider Currency)', 'Wallet Amount', 'Free spin (no cash)', 'Rollback', 'Round ID'],
         rows,
     )
 

@@ -139,7 +139,7 @@
 
     <table>
         <thead>
-            <tr><th>Date</th><th>Game</th><th>Provider</th><th>Action</th><th>Amount</th><th>Free spin</th><th>Rollback</th><th>Round ID</th></tr>
+            <tr><th>Date</th><th>Game</th><th>Provider</th><th>Action</th><th>Amount (Provider Currency)</th><th>Wallet Amount</th><th>Free spin</th><th>Rollback</th><th>Round ID</th></tr>
         </thead>
         <tbody>
             {% for event in casino_page %}
@@ -149,12 +149,13 @@
                     <td>{{ event.game.brand.name|default:"—" }}</td>
                     <td>{{ event.action }}{% if event.cash_skipped %} (no cash){% endif %}</td>
                     <td>{{ event.amount }}</td>
+                    <td>{{ event.wallet_amount }} {{ event.wallet_currency }}</td>
                     <td>{{ event.cash_skipped|yesno:"Yes,No" }}</td>
                     <td>{{ event.is_rollback|yesno:"Yes,No" }}</td>
                     <td><code>{{ event.round_id }}</code></td>
                 </tr>
             {% empty %}
-                <tr><td colspan="8">No casino activity matches this search.</td></tr>
+                <tr><td colspan="9">No casino activity matches this search.</td></tr>
             {% endfor %}
         </tbody>
     </table>
