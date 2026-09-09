@@ -57,6 +57,7 @@ from .views import (
     casino_provider_view,
     casino_launch_view,
     casino_demo_view,
+    casino_play_view,
     casino_wallet_status_view,
 )
 
@@ -126,5 +127,6 @@ urlpatterns = [
     path('casino/provider/<int:brand_id>/', casino_provider_view, name='casino_provider'),
     path('casino/<int:game_id>/launch/', casino_launch_view, name='casino_launch'),
     path('casino/<int:game_id>/demo/', casino_demo_view, name='casino_demo'),
+    path('casino/<int:game_id>/play/', casino_play_view, name='casino_play'),
     path('casino/<int:game_id>/wallet-status/', casino_wallet_status_view, name='casino_wallet_status'),
 ]

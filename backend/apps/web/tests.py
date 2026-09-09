@@ -644,11 +644,29 @@ class CasinoLaunchRedirectTests(TestCase):
         self.client.force_login(self.user)
 
     def test_launch_embeds_provider_url_in_iframe(self):
+        # casino_launch_view (POST-only) redirects to the GET-safe
+        # casino_play_view rather than rendering directly - Post/Redirect/
+        # Get, so refreshing the play page never re-hits the POST-only
+        # launch URL (which would 405 with a blank response otherwise).
         with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
-            response = self.client.post(reverse('web:casino_launch', args=[self.game.id]), {'amount': '10'})
+            response = self.client.post(reverse('web:casino_launch', args=[self.game.id]), {'amount': '10'}, follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<iframe')
         self.assertContains(response, 'https://mock-casino.local/play')
+
+    def test_play_page_survives_a_refresh(self):
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            self.client.post(reverse('web:casino_launch', args=[self.game.id]), {'amount': '10'})
+        # Simulate a page refresh: a plain GET on the same play URL the
+        # browser ended up on, in a fresh request/response cycle.
+        response = self.client.get(reverse('web:casino_play', args=[self.game.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<iframe')
+        self.assertContains(response, 'https://mock-casino.local/play')
+
+    def test_play_page_without_a_launch_redirects_to_lobby(self):
+        response = self.client.get(reverse('web:casino_play', args=[self.game.id]))
+        self.assertRedirects(response, reverse('web:casino_lobby'))
 
 
 class CasinoBrowsingTests(TestCase):

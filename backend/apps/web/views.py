@@ -3044,7 +3044,7 @@ def casino_launch_view(request, game_id):
         # of ever matching. Separate except blocks avoid that entirely.
         template, context = _casino_error_context(request)
         return render(request, template, {**context, 'error': str(exc)})
-    return _render_casino_play(request, game, launch_url)
+    return _redirect_to_casino_play(request, game, launch_url)
 
 
 @login_required
@@ -3056,7 +3056,45 @@ def casino_demo_view(request, game_id):
     except Exception as exc:  # noqa: BLE001 - surface any provider error to the player
         template, context = _casino_error_context(request)
         return render(request, template, {**context, 'error': str(exc)})
-    return _render_casino_play(request, game, demo_url)
+    return _redirect_to_casino_play(request, game, demo_url)
+
+
+def _redirect_to_casino_play(request, game, launch_url):
+    """
+    Post/Redirect/Get: casino_launch_view is POST-only (@require_POST -
+    correctly refuses a bare GET/link for a real-money launch), so
+    rendering casino_play.html directly as that POST's response means the
+    browser's address bar shows a POST-only URL - any refresh, back/
+    forward, or re-visit of that exact URL then hits Django's bare 405
+    response (empty body, blank page - this is the bug the client hit,
+    "only showing the heading, nothing else", 2026-09-09). Redirecting to
+    a GET-safe URL instead avoids that class of bug entirely. The
+    launch_url itself is a sensitive, short-lived provider token - kept
+    server-side in the session, never put in the redirect URL/query string.
+    """
+    request.session[f'casino_launch_url_{game.id}'] = launch_url
+    source_brand_id = request.POST.get('source_brand_id') or request.GET.get('source_brand_id')
+    redirect_url = reverse('web:casino_play', args=[game.id])
+    if source_brand_id:
+        redirect_url += f'?source_brand_id={source_brand_id}'
+    return redirect(redirect_url)
+
+
+@login_required
+def casino_play_view(request, game_id):
+    """
+    GET-safe landing page for an already-launched session - see
+    _redirect_to_casino_play. The session entry is intentionally left in
+    place (not popped) so refreshing this exact page keeps working for as
+    long as the session lasts; a missing entry (never launched, or a
+    stale bookmark/shared link) just sends the player back to the lobby
+    rather than a blank/broken page.
+    """
+    game = get_object_or_404(CasinoGame, pk=game_id, is_active=True)
+    launch_url = request.session.get(f'casino_launch_url_{game.id}')
+    if not launch_url:
+        return redirect('web:casino_lobby')
+    return _render_casino_play(request, game, launch_url)
 
 
 def _render_casino_play(request, game, launch_url):
