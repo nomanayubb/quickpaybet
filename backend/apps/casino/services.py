@@ -423,7 +423,14 @@ def get_wallet_and_exposure_status(user, game: CasinoGame) -> dict:
     exposure_wallet = Decimal('0')
     latest_event = (
         CasinoWalletEvent.objects.filter(user=user, game=game)
-        .order_by('-created_at')
+        # Ordered by primary key, not created_at: two events written in
+        # fast succession (Waija's real debit-to-credit gap is often
+        # under half a second) can land within the same DateTimeField
+        # tick, making created_at ties ambiguous - id is guaranteed
+        # unique and strictly increasing in true insertion order, so it's
+        # the only reliable way to know which event actually happened
+        # last. Caught by a genuinely flaky test, 2026-09-10.
+        .order_by('-id')
         .first()
     )
     if latest_event is not None and latest_event.action == CasinoWalletEvent.Action.DEBIT and not latest_event.cash_skipped:
