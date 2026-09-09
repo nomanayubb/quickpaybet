@@ -79,6 +79,21 @@
             var walletCurrency = '{{ user_currency|default:"USD" }}';
             var statusUrl = '{% url "web:casino_wallet_status" game.id %}';
             var pollTimer = null;
+            var POLL_MS = 350;
+            // A real round's debit-to-credit gap runs about 0.4-0.6s
+            // (confirmed from live Waija traffic) - far shorter than the
+            // old 4s poll, so the "bet just got deducted" moment almost
+            // never got seen: two consecutive polls could both land after
+            // the result was already in, making a bet+result look like one
+            // lump balance change instead of "deducted, then credited
+            // back". Polling this much faster closes most of that gap on
+            // its own; MIN_EXPOSURE_HOLD_MS below guarantees the rest by
+            // holding L on screen for at least that long even if the real
+            // round resolved faster than that.
+            var MIN_EXPOSURE_HOLD_MS = 700;
+            var exposureShowingNonZero = false;
+            var exposureShownAt = 0;
+            var pendingClearTimer = null;
 
             function formatAmount(walletAmount, usdAmount) {
                 if (walletCurrency === 'PKR') {
@@ -94,7 +109,22 @@
                         // Only ever update on a successful response - a failed poll
                         // just keeps whatever was last shown, never blanks the HUD.
                         hudBalance.textContent = formatAmount(data.balance_wallet, data.balance_usd);
-                        hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
+
+                        var isZero = Number(data.exposure_wallet) === 0;
+                        if (!isZero) {
+                            if (pendingClearTimer) { clearTimeout(pendingClearTimer); pendingClearTimer = null; }
+                            hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
+                            exposureShowingNonZero = true;
+                            exposureShownAt = Date.now();
+                        } else if (exposureShowingNonZero) {
+                            var remaining = Math.max(0, MIN_EXPOSURE_HOLD_MS - (Date.now() - exposureShownAt));
+                            if (pendingClearTimer) { clearTimeout(pendingClearTimer); }
+                            pendingClearTimer = setTimeout(function () {
+                                hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
+                                exposureShowingNonZero = false;
+                                pendingClearTimer = null;
+                            }, remaining);
+                        }
                     })
                     .catch(function () { /* keep last known values on screen */ });
             }
@@ -111,7 +141,7 @@
                 }, LOAD_MS);
 
                 pollStatus();
-                pollTimer = setInterval(pollStatus, 4000);
+                pollTimer = setInterval(pollStatus, POLL_MS);
             });
 
             menuBtn.addEventListener('click', function () {
