@@ -33,7 +33,7 @@ from apps.exchange.models import ExchangeOrder, ExchangeFill
 from apps.cashback.models import CashbackCredit
 from apps.casino.models import CasinoBrand, CasinoConfig, CasinoGame, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent
 from apps.casino.services import (
-    launch_game as launch_casino_game, get_demo_url as get_casino_demo_url,
+    launch_game as launch_casino_game, get_demo_url as get_casino_demo_url, get_wallet_and_exposure_status,
 )
 from apps.rewards.models import RewardPackage, UserRewardClaim
 from apps.sports.models import (
@@ -3071,9 +3071,36 @@ def _render_casino_play(request, game, launch_url):
     """
     source_brand_id = request.POST.get('source_brand_id') or request.GET.get('source_brand_id')
     brand = CasinoBrand.objects.filter(pk=source_brand_id, is_active=True).first() if source_brand_id else None
-    context = {'game': game, 'brand': brand, 'launch_url': launch_url, 'active': 'casino'}
+    context = {
+        'game': game,
+        'brand': brand,
+        'launch_url': launch_url,
+        'active': 'casino',
+        'sibling_games': CasinoGame.objects.filter(brand=game.brand, is_active=True).exclude(pk=game.id).order_by('name'),
+        'user_display_name': request.user.get_full_name() or request.user.email,
+    }
     context.update(_casino_currency_context(request.user))
     return render(request, 'web/casino_play.html', context)
+
+
+@login_required
+def casino_wallet_status_view(request, game_id):
+    """
+    Polled every few seconds by the in-game HUD on casino_play.html for a
+    live B (balance) / L (amount currently at risk on this game) readout -
+    see apps.casino.services.get_wallet_and_exposure_status. Cheap by
+    design: no provider network call, just the wallet row and a couple of
+    already-written CasinoWalletEvent rows.
+    """
+    game = get_object_or_404(CasinoGame, pk=game_id)
+    status = get_wallet_and_exposure_status(request.user, game)
+    return JsonResponse({
+        'wallet_currency': status['wallet_currency'],
+        'balance_wallet': str(status['balance_wallet']),
+        'balance_usd': str(status['balance_usd']),
+        'exposure_wallet': str(status['exposure_wallet']),
+        'exposure_usd': str(status['exposure_usd']),
+    })
 
 
 def admin_casino_dashboard_view(request):

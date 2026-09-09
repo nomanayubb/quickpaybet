@@ -397,3 +397,48 @@ def handle_waija_wallet_event(*, username: str, action: str, amount: Decimal, ca
             pass  # duplicate call_id - the wallet lock above already made this unreachable in practice
 
     return convert_wallet_currency_to_usd(user, wallet.balance)
+
+
+def get_wallet_and_exposure_status(user, game: CasinoGame) -> dict:
+    """
+    Live figures for the in-game HUD (see templates/web/casino_play.html):
+    B (current wallet balance) and L (amount currently "in play" on this
+    game - the most recent bet, until its own round is settled). Polled
+    from the browser every few seconds while a game is open, so this must
+    stay cheap: no provider network calls, just the wallet row and the
+    latest few CasinoWalletEvent rows already written by the real-time
+    Waija callbacks.
+
+    L is derived, not stored: the latest wallet event for this user+game is
+    a debit with nothing else recorded yet for its round_id -> that debit
+    is still "at risk", so L is its negative. Once *any* later event
+    arrives for that same round (a win credit, or - per Waija's own
+    behaviour - a settling event on a loss) or a new round's debit
+    supersedes it, L reflects that instead. This never blocks or delays
+    the balance itself (B) - only L is round-scoped.
+    """
+    wallet, _ = Wallet.objects.get_or_create(user=user)
+    balance_usd = convert_wallet_currency_to_usd(user, wallet.balance)
+
+    exposure_wallet = Decimal('0')
+    latest_event = (
+        CasinoWalletEvent.objects.filter(user=user, game=game)
+        .order_by('-created_at')
+        .first()
+    )
+    if latest_event is not None and latest_event.action == CasinoWalletEvent.Action.DEBIT and not latest_event.cash_skipped:
+        has_later_credit_same_round = CasinoWalletEvent.objects.filter(
+            user=user, round_id=latest_event.round_id, action=CasinoWalletEvent.Action.CREDIT,
+        ).exists()
+        if not has_later_credit_same_round:
+            exposure_wallet = -latest_event.wallet_amount
+
+    exposure_usd = -convert_wallet_currency_to_usd(user, -exposure_wallet) if exposure_wallet else Decimal('0')
+
+    return {
+        'wallet_currency': user.currency,
+        'balance_wallet': wallet.balance,
+        'balance_usd': balance_usd,
+        'exposure_wallet': exposure_wallet,
+        'exposure_usd': exposure_usd,
+    }

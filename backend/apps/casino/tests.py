@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
@@ -446,3 +447,97 @@ class PkrWalletCurrencyTests(TestCase):
         )
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, Decimal('3600.00'))  # 2200 + 1400
+
+
+class WalletAndExposureStatusTests(TestCase):
+    """apps.casino.services.get_wallet_and_exposure_status - the in-game HUD's live B/L figures."""
+
+    def setUp(self):
+        from apps.wallet.models import FxRateConfig
+        from .services import get_wallet_and_exposure_status
+
+        self.get_status = get_wallet_and_exposure_status
+        FxRateConfig.objects.update_or_create(pk=1, defaults={'usd_pkr_rate': Decimal('280.0000')})
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=737, game_uid='737', brand=self.brand, name='Aviator', category='slots', is_active=True,
+        )
+        self.user = User.objects.create_user(email='hudpkr@example.com', password='testpass123', currency='PKR')
+        deposit_funds(self.user, Decimal('1000'))  # 1000 PKR
+
+    def test_no_bet_yet_exposure_is_zero(self):
+        status = self.get_status(self.user, self.game)
+        self.assertEqual(status['exposure_wallet'], Decimal('0'))
+        self.assertEqual(status['balance_wallet'], Decimal('1000'))
+
+    def test_open_bet_shows_as_negative_exposure(self):
+        username = f'qpb{self.user.id}'
+        handle_waija_wallet_event(
+            username=username, action='debit', amount=Decimal('1.00'), call_id='hud-debit-1',
+            round_id='hud-round-1', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        status = self.get_status(self.user, self.game)
+        self.assertEqual(status['balance_wallet'], Decimal('720.00'))  # 1000 - 280
+        self.assertEqual(status['exposure_wallet'], Decimal('-280.00'))
+
+    def test_credit_for_same_round_clears_exposure(self):
+        username = f'qpb{self.user.id}'
+        handle_waija_wallet_event(
+            username=username, action='debit', amount=Decimal('1.00'), call_id='hud-debit-2',
+            round_id='hud-round-2', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        handle_waija_wallet_event(
+            username=username, action='credit', amount=Decimal('2.00'), call_id='hud-credit-2',
+            round_id='hud-round-2', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        status = self.get_status(self.user, self.game)
+        self.assertEqual(status['exposure_wallet'], Decimal('0'))
+        self.assertEqual(status['balance_wallet'], Decimal('1280.00'))  # 1000 - 280 + 560
+
+    def test_new_round_debit_shows_as_new_exposure(self):
+        username = f'qpb{self.user.id}'
+        handle_waija_wallet_event(
+            username=username, action='debit', amount=Decimal('1.00'), call_id='hud-debit-3a',
+            round_id='hud-round-3a', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        handle_waija_wallet_event(
+            username=username, action='credit', amount=Decimal('2.00'), call_id='hud-credit-3a',
+            round_id='hud-round-3a', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        handle_waija_wallet_event(
+            username=username, action='debit', amount=Decimal('0.50'), call_id='hud-debit-3b',
+            round_id='hud-round-3b', game_uid=self.game.game_uid, is_rollback=False, event_type='spin', raw_payload={},
+        )
+        status = self.get_status(self.user, self.game)
+        self.assertEqual(status['exposure_wallet'], Decimal('-140.00'))  # 0.50 * 280
+
+
+class CasinoWalletStatusViewTests(TestCase):
+    """The polled JSON endpoint (web:casino_wallet_status) behind the in-game HUD."""
+
+    def setUp(self):
+        from apps.wallet.models import FxRateConfig
+
+        FxRateConfig.objects.update_or_create(pk=1, defaults={'usd_pkr_rate': Decimal('280.0000')})
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Pragmatic Play', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=737, game_uid='737', brand=self.brand, name='Aviator', category='slots', is_active=True,
+        )
+        self.user = User.objects.create_user(email='hudview@example.com', password='testpass123', currency='PKR')
+        deposit_funds(self.user, Decimal('1000'))
+        self.client.force_login(self.user)
+
+    def test_status_endpoint_returns_pkr_balance(self):
+        import json
+
+        response = self.client.get(reverse('web:casino_wallet_status', args=[self.game.id]))
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['wallet_currency'], 'PKR')
+        self.assertEqual(data['balance_wallet'], '1000.00000000')
+        self.assertEqual(data['exposure_wallet'], '0')
+
+    def test_status_endpoint_requires_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('web:casino_wallet_status', args=[self.game.id]))
+        self.assertNotEqual(response.status_code, 200)

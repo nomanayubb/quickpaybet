@@ -1,10 +1,17 @@
 {% if user_currency == 'PKR' %}
-    <div style="border:1px solid #ddd;border-radius:6px;padding:14px 16px;margin-bottom:18px;background:#f8f9fb;">
+    <div style="border:1px solid #ddd;border-radius:6px;padding:14px 16px;margin-bottom:12px;background:#f8f9fb;">
         <p style="margin:0 0 6px;">USD Rate: <strong>1 USD = Rs {{ usd_pkr_rate }}</strong></p>
-        <p style="margin:0 0 10px;">{{ user.email }}, your current balance: <strong>Rs {{ wallet_balance_pkr|floatformat:2 }}</strong> / <strong>${{ wallet_balance_usd|floatformat:2 }}</strong></p>
+        <p style="margin:0 0 10px;">Your current balance: <strong>Rs {{ wallet_balance_pkr|floatformat:2 }}</strong> / <strong>${{ wallet_balance_usd|floatformat:2 }}</strong></p>
         <p style="margin:0;color:#555;font-size:14px;">
             <strong>Notice:</strong> Please read before playing — all casino games are played and settled in US Dollars.
             Your balance is automatically converted to and shown in Pakistani Rupees.
         </p>
+    </div>
+    <div dir="rtl" lang="ur" style="border:1px solid #ddd;border-radius:6px;padding:14px 16px;margin-bottom:18px;background:#f8f9fb;text-align:right;font-family:'Noto Nastaliq Urdu','Jameel Noori Nastaleeq',serif;">
+        <p style="margin:0 0 10px;font-weight:bold;">
+            نوٹس: براہِ کرم کھیلنے سے پہلے پڑھ لیں — تمام کیسینو گیمز امریکی ڈالرز میں کھیلی اور سیٹل کی جاتی ہیں۔
+            آپ کی رقم خودکار طور پر پاکستانی روپے میں تبدیل ہو کر آپ کے بیلنس میں دکھائی جاتی ہے۔
+        </p>
+        <p style="margin:0;">آپ کا بیلنس {{ wallet_balance_pkr|floatformat:2 }} روپے / {{ wallet_balance_usd|floatformat:2 }} ڈالر</p>
     </div>
 {% endif %}
