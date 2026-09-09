@@ -26,6 +26,29 @@ def _crc32_id(text: str) -> int:
     return zlib.crc32(text.encode('utf-8')) & 0x7FFFFFFF
 
 
+# Waija's own API never exposes a provider/brand logo (only per-game images -
+# see fetch_games/_normalize_game below), so official studio logos are
+# sourced separately from each studio's own public site and mapped here by
+# category name. Only studios with a confirmed, correctly-attributed public
+# logo are listed - unmapped categories simply render as text-only (the
+# existing '' default), rather than guessing/mislabeling a logo.
+_KNOWN_LOGO_FILES = {
+    'bgaming': 'bgaming.svg',
+    'evolution live': 'evolution_live.svg',
+    'hacksaw': 'hacksaw.svg',
+    'pragmaticplaylive': 'pragmatic.jpg',
+    'pragmaticslots': 'pragmatic.jpg',
+}
+
+
+def _known_logo_url(category: str) -> str:
+    filename = _KNOWN_LOGO_FILES.get(category.strip().lower())
+    if not filename:
+        return ''
+    from django.templatetags.static import static
+    return static(f'web/img/providers/{filename}')
+
+
 class WaijaProvider(BaseCasinoProvider):
     """
     Real implementation for Waija (branded front for the underlying
@@ -127,7 +150,10 @@ class WaijaProvider(BaseCasinoProvider):
             category = entry.get('category', 'other')
             brand_id = _crc32_id(category)
             if brand_id not in seen:
-                seen[brand_id] = {'brand_id': brand_id, 'name': category, 'logo': '', 'game_count': 0, 'currency_supported': True}
+                seen[brand_id] = {
+                    'brand_id': brand_id, 'name': category, 'logo': _known_logo_url(category),
+                    'game_count': 0, 'currency_supported': True,
+                }
             seen[brand_id]['game_count'] += 1
         return list(seen.values())
 
