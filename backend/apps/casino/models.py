@@ -93,8 +93,26 @@ class CasinoGame(models.Model):
                      'her face/upper costume. Set via admin_casino_game_live_blur_view against the free demo stream '
                      '(no way to auto-detect this - the actual video is inside a cross-origin iframe we cannot read '
                      'pixels from, so this is a manually-positioned fixed box, not real-time tracking). None means '
-                     'no overlay. Never touched by sync_catalog.',
+                     'no overlay. Never touched by sync_catalog. Used as the safety fallback whenever '
+                     'ai_tracking_enabled is on but no fresh detected_blur_region is available - see '
+                     'docs/BLUR_DOCUMENTATION.md Section 3.',
     )
+    ai_tracking_enabled = models.BooleanField(
+        default=False,
+        verbose_name='Opt this game into the live AI face-tracking watcher (apps.casino.management.commands.'
+                     'run_ai_blur_tracker) instead of (or alongside) the fixed live_blur_region. The watcher only '
+                     'runs for a game while at least one player currently has it open - see '
+                     'docs/BLUR_DOCUMENTATION.md Section 3.',
+    )
+    detected_blur_region = models.JSONField(
+        null=True, blank=True,
+        verbose_name='Live AI-detected blur region ({top, left, width, height}, percentages of the iframe area) - '
+                     'written continuously by the AI tracker watcher while it is actively watching this game, read '
+                     'by casino_wallet_status_view. Only trusted if detected_blur_region_updated_at is recent (see '
+                     'AI_TRACKING_STALE_AFTER_SECONDS in services.py) - otherwise callers must fall back to the '
+                     'fixed live_blur_region rather than show no blur at all.',
+    )
+    detected_blur_region_updated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -229,3 +247,34 @@ class CasinoWalletEvent(models.Model):
 
     def __str__(self):
         return f'{self.user_id} - {self.action} {self.amount} ({self.call_id})'
+
+
+class CasinoLiveViewer(models.Model):
+    """
+    A "someone is currently watching this game" heartbeat, one row per
+    (user, game) pair - refreshed by casino_wallet_status_view's own poll
+    (see apps.casino.services.record_live_viewer_heartbeat), not a
+    separate endpoint. This is what the AI blur tracker (management
+    command run_ai_blur_tracker, docs/BLUR_DOCUMENTATION.md Section 3)
+    uses to decide which games to actively watch: a game's watcher starts
+    when its first fresh viewer row appears and stops once none are fresh
+    (see AI_TRACKING_VIEWER_STALE_AFTER_SECONDS in services.py) - never
+    runs for a game nobody currently has open, regardless of how many
+    other games are being played. A DB row (not a cache key) specifically
+    so the web server process and the separately-running tracker process
+    always see the same, consistent state without needing a shared cache
+    backend - this project's local dev cache is process-local (locmem),
+    so a cache-based heartbeat would silently never be visible to the
+    tracker process at all.
+    """
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='casino_live_viewer_rows')
+    game = models.ForeignKey(CasinoGame, on_delete=models.CASCADE, related_name='live_viewers')
+    last_heartbeat = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['user', 'game'], name='unique_casino_live_viewer_per_user_game')]
+        verbose_name = 'Casino Live Viewer'
+        verbose_name_plural = 'Casino Live Viewers'
+
+    def __str__(self):
+        return f'{self.user_id} watching {self.game_id} (last seen {self.last_heartbeat})'

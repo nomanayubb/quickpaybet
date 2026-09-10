@@ -9,7 +9,9 @@ from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import deposit_funds
 
 from .admin import CasinoBrandAdmin, CasinoGameAdmin
-from .models import CasinoBrand, CasinoConfig, CasinoGame, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent
+from .models import (
+    CasinoBrand, CasinoConfig, CasinoGame, CasinoLiveViewer, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent,
+)
 from .providers import MockCasinoProvider
 from .services import (
     InsufficientCasinoBalance,
@@ -554,3 +556,119 @@ class CasinoWalletStatusViewTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse('web:casino_wallet_status', args=[self.game.id]))
         self.assertNotEqual(response.status_code, 200)
+
+
+class LiveAiBlurTests(TestCase):
+    """
+    apps.casino.services.record_live_viewer_heartbeat / get_effective_live_blur_region -
+    the DB-backed viewer tracking and safety-fallback logic behind the AI
+    blur tracker (see docs/BLUR_DOCUMENTATION.md Section 3). The tracker
+    daemon itself (Playwright + mediapipe) is not exercised here - it's a
+    separate, long-running process outside the test suite's scope; these
+    tests cover the Django-side contract it reads/writes.
+    """
+
+    def setUp(self):
+        from .services import get_effective_live_blur_region, record_live_viewer_heartbeat
+
+        self.get_effective_live_blur_region = get_effective_live_blur_region
+        self.record_live_viewer_heartbeat = record_live_viewer_heartbeat
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Evolution Live', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=1, game_uid='evolution/lightning-storm', brand=self.brand, name='Lightning Storm', is_active=True,
+        )
+        self.user = User.objects.create_user(email='aiblurviewer@example.com', password='testpass123')
+
+    def test_heartbeat_creates_a_viewer_row(self):
+        self.record_live_viewer_heartbeat(self.user, self.game)
+        self.assertEqual(CasinoLiveViewer.objects.filter(user=self.user, game=self.game).count(), 1)
+
+    def test_heartbeat_is_throttled_not_written_every_call(self):
+        self.record_live_viewer_heartbeat(self.user, self.game)
+        first = CasinoLiveViewer.objects.get(user=self.user, game=self.game).last_heartbeat
+        self.record_live_viewer_heartbeat(self.user, self.game)  # immediately again
+        second = CasinoLiveViewer.objects.get(user=self.user, game=self.game).last_heartbeat
+        self.assertEqual(first, second)  # throttle window hasn't elapsed - no new write
+
+    def test_no_region_at_all_returns_none(self):
+        self.assertIsNone(self.get_effective_live_blur_region(self.game))
+
+    def test_fixed_region_used_when_ai_tracking_off(self):
+        self.game.live_blur_region = {'top': 1, 'left': 2, 'width': 3, 'height': 4}
+        self.game.save(update_fields=['live_blur_region'])
+        self.assertEqual(self.get_effective_live_blur_region(self.game), {'top': 1, 'left': 2, 'width': 3, 'height': 4})
+
+    def test_fresh_detected_region_preferred_over_fixed_when_tracking_on(self):
+        from django.utils import timezone
+
+        self.game.ai_tracking_enabled = True
+        self.game.live_blur_region = {'top': 1, 'left': 2, 'width': 3, 'height': 4}
+        self.game.detected_blur_region = {'top': 9, 'left': 9, 'width': 9, 'height': 9}
+        self.game.detected_blur_region_updated_at = timezone.now()
+        self.game.save(update_fields=['ai_tracking_enabled', 'live_blur_region', 'detected_blur_region', 'detected_blur_region_updated_at'])
+        self.assertEqual(self.get_effective_live_blur_region(self.game), {'top': 9, 'left': 9, 'width': 9, 'height': 9})
+
+    def test_stale_detected_region_falls_back_to_fixed(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        self.game.ai_tracking_enabled = True
+        self.game.live_blur_region = {'top': 1, 'left': 2, 'width': 3, 'height': 4}
+        self.game.detected_blur_region = {'top': 9, 'left': 9, 'width': 9, 'height': 9}
+        self.game.detected_blur_region_updated_at = timezone.now() - timedelta(seconds=30)  # well past the staleness window
+        self.game.save(update_fields=['ai_tracking_enabled', 'live_blur_region', 'detected_blur_region', 'detected_blur_region_updated_at'])
+        self.assertEqual(self.get_effective_live_blur_region(self.game), {'top': 1, 'left': 2, 'width': 3, 'height': 4})
+
+    def test_stale_detection_with_no_fixed_fallback_returns_none(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        self.game.ai_tracking_enabled = True
+        self.game.detected_blur_region = {'top': 9, 'left': 9, 'width': 9, 'height': 9}
+        self.game.detected_blur_region_updated_at = timezone.now() - timedelta(seconds=30)
+        self.game.save(update_fields=['ai_tracking_enabled', 'detected_blur_region', 'detected_blur_region_updated_at'])
+        self.assertIsNone(self.get_effective_live_blur_region(self.game))
+
+
+class AiBlurTrackerGeometryTests(TestCase):
+    """
+    Pure-function unit tests for the padding/temporal-matching logic used
+    by the AI blur tracker daemon (apps.casino.management.commands.
+    run_ai_blur_tracker) - the daemon itself (Playwright browser + real ML
+    models) isn't exercised here, just the geometry it's built on.
+    """
+
+    def setUp(self):
+        from apps.casino.management.commands.run_ai_blur_tracker import _pad_region, _centers_close
+        self.pad_region = _pad_region
+        self.centers_close = _centers_close
+
+    def test_pad_region_expands_around_face_box(self):
+        # face box: left=40, top=30, width=10, height=10 (all percent)
+        box = {'left': 40.0, 'top': 30.0, 'width': 10.0, 'height': 10.0}
+        region = self.pad_region(box)
+        # pad_x = 10*0.35=3.5, pad_top = 10*0.25=2.5, pad_bottom = 10*1.6=16
+        self.assertEqual(region['left'], 36.5)   # 40 - 3.5
+        self.assertEqual(region['top'], 27.5)    # 30 - 2.5
+        self.assertEqual(region['width'], 17.0)  # (40+10+3.5) - (40-3.5) = 53.5-36.5
+        self.assertEqual(region['height'], 28.5)  # (30+10+16) - (30-2.5) = 56-27.5
+
+    def test_pad_region_clamped_to_frame_bounds(self):
+        # Near the top-left corner and edge - padding must never go negative or past 100.
+        box = {'left': 1.0, 'top': 1.0, 'width': 5.0, 'height': 5.0}
+        region = self.pad_region(box)
+        self.assertGreaterEqual(region['left'], 0.0)
+        self.assertGreaterEqual(region['top'], 0.0)
+
+        box_edge = {'left': 95.0, 'top': 95.0, 'width': 5.0, 'height': 5.0}
+        region_edge = self.pad_region(box_edge)
+        self.assertLessEqual(region_edge['left'] + region_edge['width'], 100.0)
+        self.assertLessEqual(region_edge['top'] + region_edge['height'], 100.0)
+
+    def test_centers_close_within_tolerance(self):
+        self.assertTrue(self.centers_close((50.0, 50.0), (52.0, 51.0)))  # small drift - same person moving slightly
+
+    def test_centers_close_rejects_far_apart_points(self):
+        self.assertFalse(self.centers_close((10.0, 10.0), (80.0, 80.0)))  # clearly a different position entirely

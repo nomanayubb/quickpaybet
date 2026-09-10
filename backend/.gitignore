@@ -11,3 +11,8 @@ venv/
 .env.local
 .env.production
 backups/
+
+# Large ML binary (45MB, Levi & Hassner gender CNN weights) - not committed
+# to keep the repo small. Download it once per environment - see
+# docs/BLUR_DOCUMENTATION.md Section 3 "Setup" for the exact command.
+apps/casino/ai_models/gender_net.caffemodel

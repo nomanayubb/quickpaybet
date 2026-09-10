@@ -7,7 +7,9 @@ from apps.audit.services import create_audit_log
 from apps.wallet.models import Wallet, WalletTransaction
 from apps.wallet.services import convert_usd_to_wallet_currency, convert_wallet_currency_to_usd
 
-from .models import CasinoBrand, CasinoConfig, CasinoGame, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent
+from .models import (
+    CasinoBrand, CasinoConfig, CasinoGame, CasinoLiveViewer, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent,
+)
 from .providers import get_casino_provider
 
 
@@ -449,3 +451,55 @@ def get_wallet_and_exposure_status(user, game: CasinoGame) -> dict:
         'exposure_wallet': exposure_wallet,
         'exposure_usd': exposure_usd,
     }
+
+
+# How stale a viewer's heartbeat (see record_live_viewer_heartbeat) can be
+# before the AI tracker stops treating them as actively watching, and how
+# stale a detected_blur_region can be before callers must fall back to the
+# fixed live_blur_region instead of trusting it. Generous on purpose - a
+# viewer's own poll runs every 350ms, so anything this old means they've
+# genuinely left, not just a slow network blip.
+AI_TRACKING_VIEWER_STALE_AFTER_SECONDS = 10
+AI_TRACKING_DETECTION_STALE_AFTER_SECONDS = 5
+
+# Heartbeat writes are throttled to at most one per this many seconds per
+# (user, game) - the caller (casino_wallet_status_view) polls every 350ms,
+# and "is this viewer still around" needs nowhere near that resolution.
+_HEARTBEAT_WRITE_THROTTLE_SECONDS = 2
+
+
+def record_live_viewer_heartbeat(user, game: CasinoGame) -> None:
+    """
+    Marks `user` as currently watching `game`, for the AI blur tracker to
+    read (see CasinoLiveViewer's docstring). Called from
+    casino_wallet_status_view on every poll, but only actually writes to
+    the DB once every _HEARTBEAT_WRITE_THROTTLE_SECONDS - "is someone
+    still watching" doesn't need the same freshness as the balance/
+    exposure figures the rest of that endpoint returns.
+    """
+    from django.utils import timezone
+
+    now = timezone.now()
+    viewer = CasinoLiveViewer.objects.filter(user=user, game=game).first()
+    if viewer is not None and (now - viewer.last_heartbeat).total_seconds() < _HEARTBEAT_WRITE_THROTTLE_SECONDS:
+        return
+    CasinoLiveViewer.objects.update_or_create(user=user, game=game, defaults={})
+
+
+def get_effective_live_blur_region(game: CasinoGame) -> dict | None:
+    """
+    What the player-facing HUD/overlay should actually show right now:
+    the live AI-detected region if it's fresh, else the fixed
+    live_blur_region as a safety fallback, else None (no overlay). Never
+    trusts a stale detection - a tracker that crashed or fell behind must
+    never silently leave the player unblurred just because it stopped
+    updating; falling back to the last-known fixed box is always safer
+    than showing nothing.
+    """
+    from django.utils import timezone
+
+    if game.ai_tracking_enabled and game.detected_blur_region and game.detected_blur_region_updated_at:
+        age = (timezone.now() - game.detected_blur_region_updated_at).total_seconds()
+        if age <= AI_TRACKING_DETECTION_STALE_AFTER_SECONDS:
+            return game.detected_blur_region
+    return game.live_blur_region

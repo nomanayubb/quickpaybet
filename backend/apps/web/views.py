@@ -34,6 +34,7 @@ from apps.cashback.models import CashbackCredit
 from apps.casino.models import CasinoBrand, CasinoConfig, CasinoGame, CasinoRoundSettlement, CasinoSession, CasinoWalletEvent
 from apps.casino.services import (
     launch_game as launch_casino_game, get_demo_url as get_casino_demo_url, get_wallet_and_exposure_status,
+    record_live_viewer_heartbeat, get_effective_live_blur_region,
 )
 from apps.rewards.models import RewardPackage, UserRewardClaim
 from apps.sports.models import (
@@ -3129,15 +3130,25 @@ def casino_wallet_status_view(request, game_id):
     see apps.casino.services.get_wallet_and_exposure_status. Cheap by
     design: no provider network call, just the wallet row and a couple of
     already-written CasinoWalletEvent rows.
+
+    Also doubles as the AI blur tracker's viewer heartbeat (see
+    apps.casino.services.record_live_viewer_heartbeat -
+    docs/BLUR_DOCUMENTATION.md Section 3) and returns the current
+    effective blur region (live AI detection if fresh, else the fixed
+    live_blur_region, else null) so the frontend overlay can move without
+    a full page reload.
     """
     game = get_object_or_404(CasinoGame, pk=game_id)
     status = get_wallet_and_exposure_status(request.user, game)
+    record_live_viewer_heartbeat(request.user, game)
+    blur_region = get_effective_live_blur_region(game)
     return JsonResponse({
         'wallet_currency': status['wallet_currency'],
         'balance_wallet': str(status['balance_wallet']),
         'balance_usd': str(status['balance_usd']),
         'exposure_wallet': str(status['exposure_wallet']),
         'exposure_usd': str(status['exposure_usd']),
+        'blur_region': blur_region,
     })
 
 

@@ -14,18 +14,23 @@
             allowfullscreen
         ></iframe>
 
-        {% if game.live_blur_region %}
-            <!-- Fixed compliance overlay - stays visible for the whole
-                 session, rendered entirely on our own page (pure CSS
-                 backdrop-filter, zero effect on the video's own loading/
-                 buffering). A fixed box, not real-time tracking - see
-                 CasinoGame.live_blur_region's docstring for why that's the
-                 technical ceiling here (the video is inside a cross-origin
-                 iframe; nothing on our page can read its pixels). -->
-            <div style="position:absolute;top:{{ game.live_blur_region.top }}%;left:{{ game.live_blur_region.left }}%;width:{{ game.live_blur_region.width }}%;height:{{ game.live_blur_region.height }}%;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:2px;z-index:3;pointer-events:none;"></div>
+        {% if game.live_blur_region or game.ai_tracking_enabled %}
+            <!-- Compliance overlay - stays visible for the whole session,
+                 rendered entirely on our own page (pure CSS backdrop-filter,
+                 zero effect on the video's own loading/buffering).
+                 Position/size come from the wallet-status poll's
+                 blur_region field (live AI detection when fresh, else the
+                 fixed live_blur_region - see get_effective_live_blur_region
+                 and docs/BLUR_DOCUMENTATION.md Section 3); this initial
+                 inline style is just the pre-poll starting state. z-index
+                 must stay below casino-loading-overlay's (see below) - a
+                 z-index without that ordering renders this blur ON TOP of
+                 the loading screen instead of under it, blurring our own
+                 branding text during the load (real bug, caught 2026-09-10). -->
+            <div id="casino-blur-overlay" style="position:absolute;{% if game.live_blur_region %}top:{{ game.live_blur_region.top }}%;left:{{ game.live_blur_region.left }}%;width:{{ game.live_blur_region.width }}%;height:{{ game.live_blur_region.height }}%;{% else %}display:none;{% endif %}backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:2px;z-index:2;pointer-events:none;transition:top 0.3s ease-out,left 0.3s ease-out,width 0.3s ease-out,height 0.3s ease-out;"></div>
         {% endif %}
 
-        <div id="casino-loading-overlay" style="position:absolute;inset:0;background:#ffffff;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#222;">
+        <div id="casino-loading-overlay" style="position:absolute;inset:0;background:#ffffff;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#222;z-index:4;">
             <img src="{% static 'web/img/quickpaybet-logo.jpg' %}" alt="QuickPayBet" style="max-width:600px;width:90%;margin-bottom:40px;">
             <div style="width:75%;max-width:480px;height:12px;background:#e0e0e0;border-radius:6px;overflow:hidden;">
                 <div id="casino-loading-bar" style="width:0%;height:100%;background:#222;"></div>
@@ -87,6 +92,7 @@
             var menuPanel = document.getElementById('casino-menu-panel');
             var hudBalance = document.getElementById('casino-hud-balance');
             var hudExposure = document.getElementById('casino-hud-exposure');
+            var blurOverlay = document.getElementById('casino-blur-overlay');
             var walletCurrency = '{{ user_currency|default:"USD" }}';
             var statusUrl = '{% url "web:casino_wallet_status" game.id %}';
             var pollTimer = null;
@@ -132,10 +138,31 @@
                 hudExposure.textContent = formatAmount(data.exposure_wallet, data.exposure_usd);
             }
 
+            function updateBlurOverlay(region) {
+                // Independent of the balance/exposure hold logic below -
+                // the compliance overlay should track as fast as each poll
+                // allows, not wait on a win reveal. region is either the
+                // live AI-detected box (moves with her, when fresh) or the
+                // fixed live_blur_region fallback (see
+                // get_effective_live_blur_region) - CSS transition on the
+                // element itself smooths the visual jump between positions.
+                if (!blurOverlay) { return; }
+                if (!region) {
+                    blurOverlay.style.display = 'none';
+                    return;
+                }
+                blurOverlay.style.display = 'block';
+                blurOverlay.style.top = region.top + '%';
+                blurOverlay.style.left = region.left + '%';
+                blurOverlay.style.width = region.width + '%';
+                blurOverlay.style.height = region.height + '%';
+            }
+
             function pollStatus() {
                 fetch(statusUrl, { credentials: 'same-origin' })
                     .then(function (res) { if (!res.ok) { throw new Error('bad status'); } return res.json(); })
                     .then(function (data) {
+                        updateBlurOverlay(data.blur_region);
                         var isZero = Number(data.exposure_wallet) === 0;
 
                         if (!isZero) {
