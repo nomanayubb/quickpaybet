@@ -1,6 +1,11 @@
 <div style="border:1px solid #ddd;border-radius:6px;padding:12px;width:220px;">
     {% if game.logo_url %}
-        <img src="{{ game.logo_url }}" alt="{{ game.name }}" style="width:100%;border-radius:4px;">
+        <div style="position:relative;">
+            <img src="{{ game.logo_url }}" alt="{{ game.name }}" style="width:100%;border-radius:4px;display:block;">
+            {% if game.blur_region %}
+                <div style="position:absolute;top:{{ game.blur_region.top }}%;left:{{ game.blur_region.left }}%;width:{{ game.blur_region.width }}%;height:{{ game.blur_region.height }}%;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-radius:2px;"></div>
+            {% endif %}
+        </div>
     {% endif %}
     <h3 style="margin:8px 0 2px;">{{ game.name }}</h3>
     <p style="color:#777;font-size:12px;margin:0 0 8px;">{{ game.brand.name }} &middot; {{ game.category }}</p>

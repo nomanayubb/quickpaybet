@@ -1,0 +1,98 @@
+{% extends 'web/base.html' %}
+
+{% block content %}
+    <h1>Set thumbnail blur - {{ game.name }}</h1>
+    <p><a href="{% url 'web:admin_casino_games' %}">&larr; Back to Casino Games</a></p>
+
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+    {% if not game.logo_url %}
+        <p>This game has no thumbnail image to blur.</p>
+    {% else %}
+        <p>Click and drag directly on the image below to draw a box over the area to blur (e.g. a face or clothing). The preview updates live. Then click Save.</p>
+
+        <div id="blur-editor" style="position:relative;display:inline-block;max-width:520px;user-select:none;cursor:crosshair;">
+            <img id="blur-image" src="{{ game.logo_url }}" alt="{{ game.name }}" style="display:block;width:100%;max-width:520px;border-radius:6px;" draggable="false">
+            <div id="blur-box" style="position:absolute;border:2px dashed #fff;box-shadow:0 0 0 1px #000;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);display:none;"></div>
+        </div>
+
+        <form method="post" style="margin-top:16px;">
+            {% csrf_token %}
+            <input type="hidden" name="top" id="input-top">
+            <input type="hidden" name="left" id="input-left">
+            <input type="hidden" name="width" id="input-width">
+            <input type="hidden" name="height" id="input-height">
+            <button type="submit" class="btn" id="save-btn" {% if not game.blur_region %}disabled{% endif %}>Save blur region</button>
+            {% if game.blur_region %}
+                <button type="submit" name="action" value="clear" class="btn" formnovalidate>Clear blur</button>
+            {% endif %}
+        </form>
+
+        <script>
+            (function () {
+                var editor = document.getElementById('blur-editor');
+                var box = document.getElementById('blur-box');
+                var saveBtn = document.getElementById('save-btn');
+                var inputs = {
+                    top: document.getElementById('input-top'),
+                    left: document.getElementById('input-left'),
+                    width: document.getElementById('input-width'),
+                    height: document.getElementById('input-height'),
+                };
+                var existing = {{ game.blur_region|default:"null"|safe }};
+                var dragging = false;
+                var startX = 0, startY = 0;
+
+                function setBoxFromPercent(top, left, width, height) {
+                    box.style.top = top + '%';
+                    box.style.left = left + '%';
+                    box.style.width = width + '%';
+                    box.style.height = height + '%';
+                    box.style.display = 'block';
+                    inputs.top.value = top.toFixed(2);
+                    inputs.left.value = left.toFixed(2);
+                    inputs.width.value = width.toFixed(2);
+                    inputs.height.value = height.toFixed(2);
+                    saveBtn.disabled = false;
+                }
+
+                if (existing) {
+                    setBoxFromPercent(existing.top, existing.left, existing.width, existing.height);
+                }
+
+                function pointerPercent(event) {
+                    var rect = editor.getBoundingClientRect();
+                    var x = ((event.clientX - rect.left) / rect.width) * 100;
+                    var y = ((event.clientY - rect.top) / rect.height) * 100;
+                    return {
+                        x: Math.max(0, Math.min(100, x)),
+                        y: Math.max(0, Math.min(100, y)),
+                    };
+                }
+
+                editor.addEventListener('mousedown', function (event) {
+                    dragging = true;
+                    var p = pointerPercent(event);
+                    startX = p.x;
+                    startY = p.y;
+                    setBoxFromPercent(startY, startX, 0, 0);
+                    event.preventDefault();
+                });
+
+                document.addEventListener('mousemove', function (event) {
+                    if (!dragging) { return; }
+                    var p = pointerPercent(event);
+                    var left = Math.min(startX, p.x);
+                    var top = Math.min(startY, p.y);
+                    var width = Math.abs(p.x - startX);
+                    var height = Math.abs(p.y - startY);
+                    setBoxFromPercent(top, left, width, height);
+                });
+
+                document.addEventListener('mouseup', function () {
+                    dragging = false;
+                });
+            })();
+        </script>
+    {% endif %}
+{% endblock %}

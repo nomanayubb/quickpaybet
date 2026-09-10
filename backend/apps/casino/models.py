@@ -80,6 +80,12 @@ class CasinoGame(models.Model):
     category = models.CharField(max_length=100, blank=True, default='')
     logo_url = models.URLField(max_length=500, blank=True, default='')
     is_active = models.BooleanField(default=True)
+    blur_region = models.JSONField(
+        null=True, blank=True,
+        verbose_name='Thumbnail blur region ({top, left, width, height}, all percentages of the image) - admin-set '
+                     'per game via admin_casino_game_blur_view; None means no blur. Never touched by sync_catalog, '
+                     'same "admin curation survives a re-sync" pattern as is_active.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

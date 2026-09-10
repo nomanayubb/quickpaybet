@@ -777,3 +777,70 @@ class CasinoCurrencyBannerTests(TestCase):
         self.client.force_login(self.pkr_user)
         response = self.client.get(reverse('web:casino_provider', args=[self.brand.id]))
         self.assertContains(response, 'settled in US Dollars')
+
+
+class CasinoGameBlurTests(TestCase):
+    """
+    Admin-drawn per-game thumbnail blur region (a face/clothing area in
+    suggestive cover art, say) - see admin_casino_game_blur_view and
+    templates/web/_casino_game_card.html. Stored as percentages of the
+    image so it's independent of wherever/however large the thumbnail
+    actually renders.
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_user(email='bluradmin@example.com', password='testpass123', is_staff=True)
+        self.player = User.objects.create_user(email='blurplayer@example.com', password='testpass123')
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Bgaming', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=1, game_uid='bgaming/some-game', brand=self.brand, name='Some Game', is_active=True,
+            logo_url='https://example.com/thumb.jpg',
+        )
+
+    def test_admin_can_save_a_blur_region(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse('web:admin_casino_game_blur', args=[self.game.id]),
+            {'top': '10.5', 'left': '20', 'width': '30', 'height': '25.25'},
+        )
+        self.assertRedirects(response, reverse('web:admin_casino_games'))
+        self.game.refresh_from_db()
+        self.assertEqual(self.game.blur_region, {'top': 10.5, 'left': 20.0, 'width': 30.0, 'height': 25.25})
+
+    def test_admin_can_clear_a_blur_region(self):
+        self.game.blur_region = {'top': 1, 'left': 2, 'width': 3, 'height': 4}
+        self.game.save(update_fields=['blur_region'])
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse('web:admin_casino_game_blur', args=[self.game.id]), {'action': 'clear'},
+        )
+        self.assertRedirects(response, reverse('web:admin_casino_games'))
+        self.game.refresh_from_db()
+        self.assertIsNone(self.game.blur_region)
+
+    def test_a_zero_size_box_is_rejected(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse('web:admin_casino_game_blur', args=[self.game.id]),
+            {'top': '10', 'left': '10', 'width': '0', 'height': '0'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.game.refresh_from_db()
+        self.assertIsNone(self.game.blur_region)
+
+    def test_non_admin_cannot_reach_the_blur_editor(self):
+        self.client.force_login(self.player)
+        response = self.client.get(reverse('web:admin_casino_game_blur', args=[self.game.id]))
+        self.assertNotEqual(response.status_code, 200)
+
+    def test_game_card_renders_blur_overlay_only_when_region_is_set(self):
+        self.client.force_login(self.player)
+        response = self.client.get(reverse('web:casino_provider', args=[self.brand.id]))
+        self.assertNotContains(response, 'backdrop-filter')
+
+        self.game.blur_region = {'top': 10, 'left': 20, 'width': 30, 'height': 40}
+        self.game.save(update_fields=['blur_region'])
+        response = self.client.get(reverse('web:casino_provider', args=[self.brand.id]))
+        self.assertContains(response, 'backdrop-filter')
+        self.assertContains(response, 'top:10%')
+        self.assertContains(response, 'left:20%')

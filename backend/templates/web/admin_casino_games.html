@@ -21,19 +21,21 @@
         <input type="hidden" name="games_q" value="{{ games_q }}">
         <input type="hidden" name="games_brand" value="{{ games_brand }}">
         <table>
-            <thead><tr><th></th><th>Name</th><th>Provider</th><th>Category</th><th>Game UID</th><th>Active</th></tr></thead>
+            <thead><tr><th></th><th>Thumbnail</th><th>Name</th><th>Provider</th><th>Category</th><th>Game UID</th><th>Active</th><th>Blur</th></tr></thead>
             <tbody>
                 {% for g in games_page %}
                     <tr>
                         <td><input type="checkbox" name="game_ids" value="{{ g.id }}"></td>
+                        <td>{% if g.logo_url %}<img src="{{ g.logo_url }}" alt="" style="width:60px;height:60px;object-fit:cover;border-radius:4px;">{% endif %}</td>
                         <td>{{ g.name }}</td>
                         <td>{{ g.brand.name }}</td>
                         <td>{{ g.category }}</td>
                         <td>{{ g.game_uid }}</td>
                         <td>{{ g.is_active|yesno:"Yes,No" }}</td>
+                        <td><a class="btn" href="{% url 'web:admin_casino_game_blur' g.id %}">{% if g.blur_region %}Edit blur{% else %}Set blur{% endif %}</a></td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="6">No games synced yet - run the sync_casino_catalog management command.</td></tr>
+                    <tr><td colspan="8">No games synced yet - run the sync_casino_catalog management command.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

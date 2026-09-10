@@ -3246,6 +3246,47 @@ def admin_casino_games_view(request):
     })
 
 
+def admin_casino_game_blur_view(request, game_id):
+    """
+    Lets an admin draw a blur rectangle over one specific area of a game's
+    thumbnail (e.g. a woman's face/clothing in suggestive cover art) -
+    per-game, admin-curated, never touched by sync_catalog (same survives-
+    a-re-sync pattern as is_active). blur_region is stored as percentages
+    of the image's own dimensions {top, left, width, height}, so it holds
+    up regardless of what size the thumbnail actually renders at anywhere
+    it's shown (see templates/web/_casino_game_card.html).
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    game = get_object_or_404(CasinoGame, pk=game_id)
+
+    if request.method == 'POST':
+        if request.POST.get('action') == 'clear':
+            game.blur_region = None
+        else:
+            try:
+                region = {
+                    'top': float(request.POST.get('top', '')),
+                    'left': float(request.POST.get('left', '')),
+                    'width': float(request.POST.get('width', '')),
+                    'height': float(request.POST.get('height', '')),
+                }
+            except (TypeError, ValueError):
+                return render(request, 'web/admin_casino_game_blur.html', {
+                    'game': game, 'active': 'admin_casino', 'error': 'Draw a box on the image first.',
+                })
+            if region['width'] <= 0 or region['height'] <= 0:
+                return render(request, 'web/admin_casino_game_blur.html', {
+                    'game': game, 'active': 'admin_casino', 'error': 'Draw a box on the image first.',
+                })
+            game.blur_region = region
+        game.save(update_fields=['blur_region', 'updated_at'])
+        return redirect('web:admin_casino_games')
+
+    return render(request, 'web/admin_casino_game_blur.html', {'game': game, 'active': 'admin_casino'})
+
+
 def admin_casino_sessions_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
