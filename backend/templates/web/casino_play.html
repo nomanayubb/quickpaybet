@@ -14,6 +14,17 @@
             allowfullscreen
         ></iframe>
 
+        {% if game.live_blur_region %}
+            <!-- Fixed compliance overlay - stays visible for the whole
+                 session, rendered entirely on our own page (pure CSS
+                 backdrop-filter, zero effect on the video's own loading/
+                 buffering). A fixed box, not real-time tracking - see
+                 CasinoGame.live_blur_region's docstring for why that's the
+                 technical ceiling here (the video is inside a cross-origin
+                 iframe; nothing on our page can read its pixels). -->
+            <div style="position:absolute;top:{{ game.live_blur_region.top }}%;left:{{ game.live_blur_region.left }}%;width:{{ game.live_blur_region.width }}%;height:{{ game.live_blur_region.height }}%;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:2px;z-index:3;pointer-events:none;"></div>
+        {% endif %}
+
         <div id="casino-loading-overlay" style="position:absolute;inset:0;background:#ffffff;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#222;">
             <img src="{% static 'web/img/quickpaybet-logo.jpg' %}" alt="QuickPayBet" style="max-width:600px;width:90%;margin-bottom:40px;">
             <div style="width:75%;max-width:480px;height:12px;background:#e0e0e0;border-radius:6px;overflow:hidden;">

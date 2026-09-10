@@ -844,3 +844,113 @@ class CasinoGameBlurTests(TestCase):
         self.assertContains(response, 'backdrop-filter')
         self.assertContains(response, 'top:10%')
         self.assertContains(response, 'left:20%')
+
+
+class CasinoGameLiveBlurTests(TestCase):
+    """
+    Admin-positioned FIXED overlay box shown for the whole session on
+    casino_play.html (a live dealer's face/upper costume, say) - see
+    admin_casino_game_live_blur_view. Deliberately NOT real-time tracking
+    (the video is inside a cross-origin iframe our page cannot read
+    pixels from), so this is a manually-drawn fixed box, positioned
+    against the free demo stream so the admin can see real footage.
+    """
+
+    def setUp(self):
+        CasinoConfig.objects.filter(pk=1).delete()
+        CasinoConfig.objects.create(pk=1, is_enabled=True, max_launch_balance=Decimal('100.00'))
+        self.admin = User.objects.create_user(email='liveblur_admin@example.com', password='testpass123', is_staff=True)
+        self.player = User.objects.create_user(email='liveblur_player@example.com', password='testpass123')
+        deposit_funds(self.player, Decimal('1000'))
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Evolution Live', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=1, game_uid='evolution/some-live-game', brand=self.brand, name='Some Live Game', is_active=True,
+            logo_url='https://example.com/thumb.jpg',
+        )
+
+    def test_editor_loads_the_real_demo_stream(self):
+        self.client.force_login(self.admin)
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.get(reverse('web:admin_casino_game_live_blur', args=[self.game.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'https://mock-casino.local/demo')
+
+    def test_admin_can_save_a_live_blur_box(self):
+        self.client.force_login(self.admin)
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.post(
+                reverse('web:admin_casino_game_live_blur', args=[self.game.id]),
+                {'top': '5', 'left': '30', 'width': '40', 'height': '35'},
+            )
+        self.assertRedirects(response, reverse('web:admin_casino_games'))
+        self.game.refresh_from_db()
+        self.assertEqual(self.game.live_blur_region, {'top': 5.0, 'left': 30.0, 'width': 40.0, 'height': 35.0})
+
+    def test_admin_can_clear_a_live_blur_box(self):
+        self.game.live_blur_region = {'top': 1, 'left': 2, 'width': 3, 'height': 4}
+        self.game.save(update_fields=['live_blur_region'])
+        self.client.force_login(self.admin)
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.post(
+                reverse('web:admin_casino_game_live_blur', args=[self.game.id]), {'action': 'clear'},
+            )
+        self.assertRedirects(response, reverse('web:admin_casino_games'))
+        self.game.refresh_from_db()
+        self.assertIsNone(self.game.live_blur_region)
+
+    def test_non_admin_cannot_reach_the_live_blur_editor(self):
+        self.client.force_login(self.player)
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.get(reverse('web:admin_casino_game_live_blur', args=[self.game.id]))
+        self.assertNotEqual(response.status_code, 200)
+
+    def test_play_page_shows_persistent_overlay_only_when_region_is_set(self):
+        self.client.force_login(self.player)
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.post(reverse('web:casino_launch', args=[self.game.id]), {'amount': '10'}, follow=True)
+        self.assertNotContains(response, 'backdrop-filter:blur(18px)')
+
+        self.game.live_blur_region = {'top': 5, 'left': 30, 'width': 40, 'height': 35}
+        self.game.save(update_fields=['live_blur_region'])
+        with patch('apps.casino.services.get_casino_provider', return_value=MockCasinoProvider()):
+            response = self.client.post(reverse('web:casino_launch', args=[self.game.id]), {'amount': '10'}, follow=True)
+        self.assertContains(response, 'backdrop-filter:blur(18px)')
+        self.assertContains(response, 'top:5%')
+        self.assertContains(response, 'left:30%')
+
+
+class CasinoGameLiveBlurDemoFallbackTests(TestCase):
+    """Most live-dealer games have no demo mode at all - the editor must fall back to the thumbnail, not crash or dead-end."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(email='liveblur_fallback_admin@example.com', password='testpass123', is_staff=True)
+        self.brand = CasinoBrand.objects.create(brand_id=1, name='Evolution Live', is_active=True)
+        self.game = CasinoGame.objects.create(
+            game_id=1, game_uid='evolution/some-live-game', brand=self.brand, name='Some Live Game', is_active=True,
+            logo_url='https://example.com/thumb.jpg',
+        )
+        self.client.force_login(self.admin)
+
+    def _no_demo_provider(self):
+        provider = MockCasinoProvider()
+        provider.fetch_demo_url = lambda game_uid, return_url='': (_ for _ in ()).throw(
+            RuntimeError('Demo mode is not available for this game.')
+        )
+        return provider
+
+    def test_falls_back_to_thumbnail_when_demo_unavailable(self):
+        with patch('apps.casino.services.get_casino_provider', return_value=self._no_demo_provider()):
+            response = self.client.get(reverse('web:admin_casino_game_live_blur', args=[self.game.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'https://example.com/thumb.jpg')
+        self.assertContains(response, 'Demo mode is not available')
+
+    def test_can_still_save_a_box_using_the_thumbnail_fallback(self):
+        with patch('apps.casino.services.get_casino_provider', return_value=self._no_demo_provider()):
+            response = self.client.post(
+                reverse('web:admin_casino_game_live_blur', args=[self.game.id]),
+                {'top': '5', 'left': '30', 'width': '40', 'height': '35'},
+            )
+        self.assertRedirects(response, reverse('web:admin_casino_games'))
+        self.game.refresh_from_db()
+        self.assertEqual(self.game.live_blur_region, {'top': 5.0, 'left': 30.0, 'width': 40.0, 'height': 35.0})

@@ -86,6 +86,15 @@ class CasinoGame(models.Model):
                      'per game via admin_casino_game_blur_view; None means no blur. Never touched by sync_catalog, '
                      'same "admin curation survives a re-sync" pattern as is_active.',
     )
+    live_blur_region = models.JSONField(
+        null=True, blank=True,
+        verbose_name='Persistent in-play blur region ({top, left, width, height}, percentages of the iframe area) - '
+                     'a fixed overlay shown for the whole session on a live-dealer game with a female host, covering '
+                     'her face/upper costume. Set via admin_casino_game_live_blur_view against the free demo stream '
+                     '(no way to auto-detect this - the actual video is inside a cross-origin iframe we cannot read '
+                     'pixels from, so this is a manually-positioned fixed box, not real-time tracking). None means '
+                     'no overlay. Never touched by sync_catalog.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

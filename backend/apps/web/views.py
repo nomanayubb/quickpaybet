@@ -3287,6 +3287,74 @@ def admin_casino_game_blur_view(request, game_id):
     return render(request, 'web/admin_casino_game_blur.html', {'game': game, 'active': 'admin_casino'})
 
 
+def _parse_blur_region_from_post(request):
+    """Shared by both blur editors - returns (region_dict_or_None, error_or_None). A None region with no error means 'clear'."""
+    if request.POST.get('action') == 'clear':
+        return None, None
+    try:
+        region = {
+            'top': float(request.POST.get('top', '')),
+            'left': float(request.POST.get('left', '')),
+            'width': float(request.POST.get('width', '')),
+            'height': float(request.POST.get('height', '')),
+        }
+    except (TypeError, ValueError):
+        return None, 'Draw a box first.'
+    if region['width'] <= 0 or region['height'] <= 0:
+        return None, 'Draw a box first.'
+    return region, None
+
+
+def admin_casino_game_live_blur_view(request, game_id):
+    """
+    Lets an admin position a FIXED overlay box that stays visible for the
+    whole session on casino_play.html, covering a live dealer's face/upper
+    costume - see live_blur_region's own docstring on CasinoGame for why
+    this can only ever be a fixed box, not real-time tracking (the video
+    is inside a cross-origin iframe; no script on our page can read its
+    pixels, so there is nothing to run detection against, automated or
+    not - this is a hard browser security boundary, not a missing feature).
+
+    Positioned against the free demo stream (no wallet/session cost) so
+    the admin can see the actual live video, not just the static
+    thumbnail. In practice most live-dealer games have no demo mode at
+    all (confirmed live, 2026-09-10: "Demo mode is not available for this
+    game" - you can't demo a real live broadcast), so this falls back to
+    the game's own thumbnail as a best-effort reference when that happens
+    - for a live table game the promo thumbnail is usually a real photo
+    of the actual dealer at the actual table, just not the live camera
+    feed itself.
+    """
+    if not _has_dashboard_access(request.user):
+        return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    game = get_object_or_404(CasinoGame, pk=game_id)
+
+    if request.method == 'POST':
+        region, error = _parse_blur_region_from_post(request)
+        if error:
+            demo_url, demo_error = _try_get_demo_url(request, game)
+            return render(request, 'web/admin_casino_game_live_blur.html', {
+                'game': game, 'active': 'admin_casino', 'error': error, 'demo_url': demo_url, 'demo_error': demo_error,
+            })
+        game.live_blur_region = region
+        game.save(update_fields=['live_blur_region', 'updated_at'])
+        return redirect('web:admin_casino_games')
+
+    demo_url, demo_error = _try_get_demo_url(request, game)
+    return render(request, 'web/admin_casino_game_live_blur.html', {
+        'game': game, 'active': 'admin_casino', 'demo_url': demo_url, 'demo_error': demo_error,
+    })
+
+
+def _try_get_demo_url(request, game):
+    try:
+        return_url = request.build_absolute_uri(reverse('web:casino_lobby'))
+        return get_casino_demo_url(game, return_url), None
+    except Exception as exc:  # noqa: BLE001 - surface any provider error, this is an admin diagnostic tool
+        return None, str(exc)
+
+
 def admin_casino_sessions_view(request):
     if not _has_dashboard_access(request.user):
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")

@@ -1,18 +1,35 @@
 {% extends 'web/base.html' %}
 
 {% block content %}
-    <h1>Set thumbnail blur - {{ game.name }}</h1>
+    <h1>Set live in-play blur - {{ game.name }}</h1>
     <p><a href="{% url 'web:admin_casino_games' %}">&larr; Back to Casino Games</a></p>
 
+    <p style="max-width:700px;">
+        Drag on the image/video below to draw a fixed box over the dealer's face and upper costume - it will stay
+        in that exact spot for the whole session on the real play page. It does not follow her if she moves; size
+        it generously enough to cover her at most times. The box position is saved as percentages of this same
+        80vh-tall area, matching the real play page exactly, so it lines up correctly regardless of which reference
+        below is shown.
+    </p>
+
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
-
-    {% if not game.logo_url %}
-        <p>This game has no thumbnail image to blur.</p>
+    {% if demo_error and not game.logo_url %}
+        <p class="error">Could not load the demo stream ({{ demo_error }}), and this game has no thumbnail to fall back to either.</p>
     {% else %}
-        <p>Click and drag directly on the image below to draw a box over the area to blur (e.g. a face or clothing). The preview updates live. Then click Save.</p>
-
-        <div id="blur-editor" style="position:relative;display:inline-block;max-width:520px;user-select:none;cursor:crosshair;touch-action:none;">
-            <img id="blur-image" src="{{ game.logo_url }}" alt="{{ game.name }}" style="display:block;width:100%;max-width:520px;border-radius:6px;" draggable="false">
+        {% if demo_error %}
+            <p class="error">
+                No demo mode for this game ({{ demo_error }}) - most live-dealer games don't support one at all, since
+                you can't demo a real live broadcast. Using the promotional thumbnail below as a best-effort stand-in
+                instead - for a live table game this is usually a real photo of the actual dealer/table, just not the
+                live camera feed itself, so double-check against a real session afterward if you can.
+            </p>
+        {% endif %}
+        <div id="blur-editor" style="position:relative;width:100%;max-width:900px;height:80vh;background:#000;user-select:none;cursor:crosshair;touch-action:none;">
+            {% if demo_error %}
+                <img src="{{ game.logo_url }}" alt="{{ game.name }}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;pointer-events:none;">
+            {% else %}
+                <iframe src="{{ demo_url }}" style="width:100%;height:100%;border:0;border-radius:6px;pointer-events:none;" allow="autoplay"></iframe>
+            {% endif %}
             <div id="blur-box" style="position:absolute;border:2px dashed #fff;box-shadow:0 0 0 1px #000;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);display:none;"></div>
         </div>
 
@@ -22,9 +39,9 @@
             <input type="hidden" name="left" id="input-left">
             <input type="hidden" name="width" id="input-width">
             <input type="hidden" name="height" id="input-height">
-            <button type="submit" class="btn" id="save-btn" {% if not game.blur_region %}disabled{% endif %}>Save blur region</button>
-            {% if game.blur_region %}
-                <button type="submit" name="action" value="clear" class="btn" formnovalidate>Clear blur</button>
+            <button type="submit" class="btn" id="save-btn" {% if not game.live_blur_region %}disabled{% endif %}>Save live blur box</button>
+            {% if game.live_blur_region %}
+                <button type="submit" name="action" value="clear" class="btn" formnovalidate>Remove live blur</button>
             {% endif %}
         </form>
 
@@ -39,7 +56,7 @@
                     width: document.getElementById('input-width'),
                     height: document.getElementById('input-height'),
                 };
-                var existing = {{ game.blur_region|default:"null"|safe }};
+                var existing = {{ game.live_blur_region|default:"null"|safe }};
                 var dragging = false;
                 var startX = 0, startY = 0;
 
@@ -70,9 +87,6 @@
                     };
                 }
 
-                // Pointer Events (not mouse-only) so this works with touch
-                // and pen input too, not just a mouse - a drag gesture on a
-                // phone/tablet wouldn't fire mousedown/mousemove at all.
                 editor.addEventListener('pointerdown', function (event) {
                     dragging = true;
                     if (editor.setPointerCapture) { editor.setPointerCapture(event.pointerId); }
@@ -94,12 +108,8 @@
                     event.preventDefault();
                 });
 
-                editor.addEventListener('pointerup', function () {
-                    dragging = false;
-                });
-                editor.addEventListener('pointercancel', function () {
-                    dragging = false;
-                });
+                editor.addEventListener('pointerup', function () { dragging = false; });
+                editor.addEventListener('pointercancel', function () { dragging = false; });
             })();
         </script>
     {% endif %}

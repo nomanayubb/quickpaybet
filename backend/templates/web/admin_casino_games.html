@@ -21,7 +21,7 @@
         <input type="hidden" name="games_q" value="{{ games_q }}">
         <input type="hidden" name="games_brand" value="{{ games_brand }}">
         <table>
-            <thead><tr><th></th><th>Thumbnail</th><th>Name</th><th>Provider</th><th>Category</th><th>Game UID</th><th>Active</th><th>Blur</th></tr></thead>
+            <thead><tr><th></th><th>Thumbnail</th><th>Name</th><th>Provider</th><th>Category</th><th>Game UID</th><th>Active</th><th>Thumbnail blur</th><th>Live blur</th></tr></thead>
             <tbody>
                 {% for g in games_page %}
                     <tr>
@@ -33,9 +33,10 @@
                         <td>{{ g.game_uid }}</td>
                         <td>{{ g.is_active|yesno:"Yes,No" }}</td>
                         <td><a class="btn" href="{% url 'web:admin_casino_game_blur' g.id %}">{% if g.blur_region %}Edit blur{% else %}Set blur{% endif %}</a></td>
+                        <td><a class="btn" href="{% url 'web:admin_casino_game_live_blur' g.id %}">{% if g.live_blur_region %}Edit live blur{% else %}Set live blur{% endif %}</a></td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="8">No games synced yet - run the sync_casino_catalog management command.</td></tr>
+                    <tr><td colspan="9">No games synced yet - run the sync_casino_catalog management command.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
